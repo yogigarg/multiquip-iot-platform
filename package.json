@@ -1,7 +1,7 @@
 {
   "name": "multiquip-iot-platform",
   "version": "1.0.0",
-  "description": "Multiquip Construction Equipment IoT Platform with Snowflake Integration",
+  "description": "Multiquip Construction Equipment IoT Platform with Snowflake Integration and Predictive Maintenance",
   "private": true,
   "dependencies": {
     "@testing-library/jest-dom": "^5.16.4",
@@ -11,7 +11,8 @@
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
     "lucide-react": "^0.263.1",
-    "web-vitals": "^2.1.4"
+    "web-vitals": "^2.1.4",
+    "@tensorflow/tfjs": "^4.10.0"
   },
   "scripts": {
     "start": "react-scripts start",
