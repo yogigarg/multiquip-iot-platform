@@ -1,4 +1,3 @@
-// src/MultiquipPlatform.js
 import React, { useState, useEffect } from 'react';
 import { 
   Activity, 
@@ -24,8 +23,26 @@ import {
   Download,
   Upload
 } from 'lucide-react';
+import { 
+  LineChart, 
+  Line, 
+  BarChart, 
+  Bar, 
+  PieChart, 
+  Pie, 
+  Cell, 
+  ScatterChart, 
+  Scatter,
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  Legend, 
+  ResponsiveContainer 
+} from 'recharts';
 import snowflakeAPI from './services/SnowflakeAPIService';
 import * as tf from '@tensorflow/tfjs';
+
 
 const MultiquipPlatform = () => {
   const [activeModule, setActiveModule] = useState('dashboard');
@@ -649,364 +666,376 @@ const MultiquipPlatform = () => {
     );
   };
 
-  // Main Dashboard with Snowflake data and ML integration
-  const DashboardModule = () => (
-    <div className="space-y-6">
-      {loading && (
-        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-          <div className="flex items-center space-x-2">
-            <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
-            <span className="text-blue-800">Loading live data from Snowflake...</span>
-          </div>
-        </div>
-      )}
+// Move JobSiteOverview outside of DashboardModule
+// Place this BEFORE the DashboardModule definition
 
-      {!snowflakeAPI.isUsingMockData() && connectionStatus === 'connected' && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <div className="flex items-center space-x-2">
-            <CheckCircle className="h-4 w-4 text-green-600" />
-            <span className="text-green-800">✅ Connected to Snowflake - Showing live data</span>
-          </div>
+const JobSiteOverview = ({ dashboardData, connectionStatus, mlModel, setActiveModule }) => {
+  return (
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold">Job Sites Overview</h3>
+          <p className="text-sm text-gray-600">
+            {dashboardData.jobSites.length} active sites
+          </p>
         </div>
-      )}
-
-      {snowflakeAPI.isUsingMockData() && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-center space-x-2">
-            <AlertTriangle className="h-4 w-4 text-yellow-600" />
-            <span className="text-yellow-800">⚠️ Demo Mode - Update .env with Snowflake credentials</span>
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Total Equipment</p>
-              <p className="text-2xl font-bold text-gray-900">{dashboardData.totalEquipment}</p>
-              <p className="text-xs text-gray-500">From Snowflake DB</p>
-            </div>
-            <Activity className="h-12 w-12 text-blue-600" />
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Fleet Uptime</p>
-              <p className="text-2xl font-bold text-gray-900">{dashboardData.uptime}%</p>
-              <p className="text-xs text-gray-500">Real-time average</p>
-            </div>
-            <CheckCircle className="h-12 w-12 text-green-600" />
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">ML Accuracy</p>
-              <p className="text-2xl font-bold text-gray-900">{modelMetrics.accuracy || dashboardData.accuracy}%</p>
-              <p className="text-xs text-gray-500">{mlModel ? 'Live ML Model' : 'ML Performance'}</p>
-            </div>
-            <Brain className="h-12 w-12 text-purple-600" />
-          </div>
-        </div>
-        
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-gray-600">Cost Savings</p>
-              <p className="text-2xl font-bold text-gray-900">${dashboardData.savings}M</p>
-              <p className="text-xs text-gray-500">YTD from DB</p>
-            </div>
-            <DollarSign className="h-12 w-12 text-green-600" />
-          </div>
-        </div>
+        <button 
+          onClick={() => setActiveModule('equipment')}
+          className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+        >
+          View Full Map
+        </button>
       </div>
 
-      {/* ML Model Training Section */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-lg font-semibold flex items-center space-x-2">
-              <Brain className="h-5 w-5 text-purple-600" />
-              <span>Predictive Maintenance AI</span>
-            </h3>
-            <p className="text-sm text-gray-600">
-              Machine learning model for equipment failure prediction
-            </p>
-          </div>
-          <div className="flex space-x-2">
-            <button
-              onClick={trainPredictiveModel}
-              disabled={isTraining}
-              className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
-            >
-              {isTraining ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-              <span>{isTraining ? 'Training...' : mlModel ? 'Retrain Model' : 'Train Model'}</span>
-            </button>
-            {mlModel && (
-              <button
-                onClick={() => generateMLPredictions()}
-                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-              >
-                <RefreshCw className="h-4 w-4" />
-                <span>Refresh Predictions</span>
-              </button>
-            )}
-          </div>
-        </div>
-
-        {isTraining && (
-          <div className="mb-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {dashboardData.jobSites.map((site, index) => (
+          <div key={index} className="border rounded-lg p-4">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-sm text-gray-600">Training Progress</span>
-              <span className="text-sm text-gray-600">{trainingProgress.toFixed(0)}%</span>
+              <h4 className="font-medium text-sm">{site.name}</h4>
+              <span className="text-xs text-gray-500">{site.equipment} units</span>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-2">
-              <div 
-                className="bg-purple-600 h-2 rounded-full transition-all duration-300"
-                style={{ width: `${trainingProgress}%` }}
-              />
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Training neural network on 90 days of sensor data...
-            </p>
-          </div>
-        )}
-
-        {mlModel && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-            <div className="text-center p-3 bg-blue-50 rounded">
-              <p className="text-2xl font-bold text-blue-600">{modelMetrics.accuracy}%</p>
-              <p className="text-sm text-gray-600">Accuracy</p>
-            </div>
-            <div className="text-center p-3 bg-green-50 rounded">
-              <p className="text-2xl font-bold text-green-600">{modelMetrics.precision}%</p>
-              <p className="text-sm text-gray-600">Precision</p>
-            </div>
-            <div className="text-center p-3 bg-purple-50 rounded">
-              <p className="text-2xl font-bold text-purple-600">{modelMetrics.recall}%</p>
-              <p className="text-sm text-gray-600">Recall</p>
-            </div>
-            <div className="text-center p-3 bg-orange-50 rounded">
-              <p className="text-2xl font-bold text-orange-600">{modelMetrics.f1Score}%</p>
-              <p className="text-sm text-gray-600">F1 Score</p>
+            <div className="space-y-1 text-xs text-gray-600">
+              <p>Manager: {site.manager}</p>
+              <p>Work Areas: {site.areas}</p>
+              <div className="flex items-center space-x-2 mt-2">
+                <div className="flex-1 bg-gray-200 rounded-full h-1.5">
+                  <div 
+                    className="bg-green-500 h-1.5 rounded-full" 
+                    style={{ width: `${85 + Math.random() * 15}%` }}
+                  ></div>
+                </div>
+                <span className="text-xs">92% active</span>
+              </div>
             </div>
           </div>
-        )}
-
-        {!mlModel && !isTraining && (
-          <div className="text-center py-8 text-gray-500">
-            <Brain className="h-12 w-12 mx-auto mb-2 text-gray-400" />
-            <p>No ML model trained yet. Click "Train Model" to start predictive maintenance.</p>
-          </div>
-        )}
+        ))}
       </div>
 
-      {/* ML Predictions Section */}
-      {mlPredictions.length > 0 && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h3 className="text-lg font-semibold">🧠 AI Maintenance Predictions</h3>
-              <p className="text-sm text-gray-600">
-                Real-time failure risk analysis for equipment fleet
-              </p>
-            </div>
-            <div className="flex items-center space-x-2 text-sm text-gray-600">
-              <Clock className="h-4 w-4" />
-              <span>Updated: {mlPredictions.length > 0 ? new Date(mlPredictions[0].lastUpdated).toLocaleTimeString() : 'Never'}</span>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            {mlPredictions.map((prediction) => (
-              <div key={prediction.equipmentId} className="border rounded-lg p-4">
-                <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-center">
-                  <div>
-                    <h4 className="font-medium">{prediction.equipmentId}</h4>
-                    <p className="text-sm text-gray-600">Equipment ID</p>
-                  </div>
-                  
-                  <div className="text-center">
-                    <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
-                      prediction.riskLevel === 'high' ? 'bg-red-100 text-red-800' :
-                      prediction.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                      'bg-green-100 text-green-800'
-                    }`}>
-                      {prediction.riskLevel.toUpperCase()}
-                    </div>
-                    <p className="text-xs text-gray-600 mt-1">Risk Level</p>
-                  </div>
-                  
-                  <div className="text-center">
-                    <p className="text-lg font-bold">{prediction.failureProbability}%</p>
-                    <p className="text-xs text-gray-600">Failure Risk</p>
-                  </div>
-                  
-                  <div className="text-center">
-                    <p className="text-lg font-bold">{prediction.daysUntilMaintenance}</p>
-                    <p className="text-xs text-gray-600">Days to Maintenance</p>
-                  </div>
-                  
-                  <div className="col-span-2">
-                    <p className="text-sm font-medium mb-2">{prediction.recommendedAction}</p>
-                    <div className="grid grid-cols-2 gap-2 text-xs">
-                      <span>Temp: {prediction.sensors.temperature}°F</span>
-                      <span>Vibration: {prediction.sensors.vibration}g</span>
-                      <span>Pressure: {prediction.sensors.pressure} PSI</span>
-                      <span>Current: {prediction.sensors.current}A</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+      {connectionStatus === 'connected' && (
+        <div className="mt-4 p-3 bg-blue-50 rounded-lg">
+          <p className="text-sm text-blue-800">
+            <strong>🔗 Live Data:</strong> Site information updated from Snowflake database.
+            Click "View Full Map" for detailed equipment tracking.
+          </p>
         </div>
       )}
+    </div>
+  );
+};
 
-      <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold mb-4">Equipment Categories</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {dashboardData.equipmentCategories.map((category, index) => {
-            const Icon = category.icon;
-            return (
-              <div key={index} className="flex items-center p-4 border rounded-lg">
-                <div className={`p-3 rounded-lg ${category.color} text-white mr-4`}>
-                  <Icon className="h-6 w-6" />
-                </div>
-                <div>
-                  <h4 className="font-medium text-sm">{category.name}</h4>
-                  <p className="text-sm text-gray-600">{category.count} units</p>
-                  <p className="text-xs text-gray-500">{category.fuelType}</p>
-                </div>
-              </div>
-            );
-          })}
+// Then update your DashboardModule to use the component:
+const DashboardModule = () => (
+  <div className="space-y-6">
+    {loading && (
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <div className="flex items-center space-x-2">
+          <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+          <span className="text-blue-800">Loading live data from Snowflake...</span>
         </div>
       </div>
+    )}
 
+    {!snowflakeAPI.isUsingMockData() && connectionStatus === 'connected' && (
+      <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+        <div className="flex items-center space-x-2">
+          <CheckCircle className="h-4 w-4 text-green-600" />
+          <span className="text-green-800">✅ Connected to Snowflake - Showing live data</span>
+        </div>
+      </div>
+    )}
+
+    {snowflakeAPI.isUsingMockData() && (
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+        <div className="flex items-center space-x-2">
+          <AlertTriangle className="h-4 w-4 text-yellow-600" />
+          <span className="text-yellow-800">⚠️ Demo Mode - Update .env with Snowflake credentials</span>
+        </div>
+      </div>
+    )}
+
+    {/* KPI Cards */}
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
       <div className="bg-white rounded-lg shadow p-6">
-        <h3 className="text-lg font-semibold mb-4">Priority Alerts & Predictions</h3>
-        <div className="space-y-3">
-          {/* Combine traditional alerts with ML predictions */}
-          {[...dashboardData.alerts, ...mlPredictions
-            .filter(p => p.riskLevel === 'high')
-            .map(p => ({
-              id: `ml-${p.equipmentId}`,
-              equipment: p.equipmentId,
-              severity: 'critical',
-              message: `AI Prediction: ${p.recommendedAction} (${p.failureProbability}% failure risk)`,
-              site: 'Multiple Sites',
-              createdAt: p.lastUpdated,
-              isMLPrediction: true
-            }))
-          ].length > 0 ? 
-          [...dashboardData.alerts, ...mlPredictions
-            .filter(p => p.riskLevel === 'high')
-            .map(p => ({
-              id: `ml-${p.equipmentId}`,
-              equipment: p.equipmentId,
-              severity: 'critical',
-              message: `AI Prediction: ${p.recommendedAction} (${p.failureProbability}% failure risk)`,
-              site: 'Multiple Sites',
-              createdAt: p.lastUpdated,
-              isMLPrediction: true
-            }))
-          ].map((alert) => (
-            <div key={alert.id} className="flex items-center justify-between p-3 border rounded-lg">
-              <div className="flex items-center space-x-3">
-                <div className={`w-3 h-3 rounded-full ${
-                  alert.severity === 'critical' ? 'bg-red-500' : 
-                  alert.severity === 'high' ? 'bg-yellow-500' : 'bg-orange-500'
-                }`} />
-                {alert.isMLPrediction && <Brain className="h-4 w-4 text-purple-600" />}
-                <div>
-                  <p className="font-medium text-sm">{alert.equipment}</p>
-                  <p className="text-sm text-gray-600">{alert.message}</p>
-                  <p className="text-xs text-gray-500">
-                    {alert.site} {alert.isMLPrediction && '• AI Prediction'}
-                  </p>
-                </div>
-              </div>
-              <div className="flex space-x-2">
-                <button className="px-3 py-1 bg-blue-600 text-white text-sm rounded">
-                  View
-                </button>
-                <button className="px-3 py-1 bg-green-600 text-white text-sm rounded">
-                  {alert.isMLPrediction ? 'Schedule' : 'Service'}
-                </button>
-              </div>
-            </div>
-          )) : (
-            <div className="text-center py-8 text-gray-500">
-              <CheckCircle className="h-12 w-12 mx-auto mb-2 text-green-500" />
-              <p>No active alerts - all equipment operational</p>
-              {mlModel && <p className="text-sm">AI monitoring active for predictive maintenance</p>}
-            </div>
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-600">Total Equipment</p>
+            <p className="text-2xl font-bold text-gray-900">{dashboardData.totalEquipment}</p>
+            <p className="text-xs text-gray-500">From Snowflake DB</p>
+          </div>
+          <Activity className="h-12 w-12 text-blue-600" />
+        </div>
+      </div>
+      
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-600">Fleet Uptime</p>
+            <p className="text-2xl font-bold text-gray-900">{dashboardData.uptime}%</p>
+            <p className="text-xs text-gray-500">Real-time average</p>
+          </div>
+          <CheckCircle className="h-12 w-12 text-green-600" />
+        </div>
+      </div>
+      
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-600">ML Accuracy</p>
+            <p className="text-2xl font-bold text-gray-900">{modelMetrics.accuracy || dashboardData.accuracy}%</p>
+            <p className="text-xs text-gray-500">{mlModel ? 'Live ML Model' : 'ML Performance'}</p>
+          </div>
+          <Brain className="h-12 w-12 text-purple-600" />
+        </div>
+      </div>
+      
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-gray-600">Cost Savings</p>
+            <p className="text-2xl font-bold text-gray-900">${dashboardData.savings}M</p>
+            <p className="text-xs text-gray-500">YTD from DB</p>
+          </div>
+          <DollarSign className="h-12 w-12 text-green-600" />
+        </div>
+      </div>
+    </div>
+
+    {/* ML Model Training Section */}
+    <div className="bg-white rounded-lg shadow p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-lg font-semibold flex items-center space-x-2">
+            <Brain className="h-5 w-5 text-purple-600" />
+            <span>Predictive Maintenance AI</span>
+          </h3>
+          <p className="text-sm text-gray-600">
+            Machine learning model for equipment failure prediction
+          </p>
+        </div>
+        <div className="flex space-x-2">
+          <button
+            onClick={trainPredictiveModel}
+            disabled={isTraining}
+            className="flex items-center space-x-2 px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50"
+          >
+            {isTraining ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+            <span>{isTraining ? 'Training...' : mlModel ? 'Retrain Model' : 'Train Model'}</span>
+          </button>
+          {mlModel && (
+            <button
+              onClick={() => generateMLPredictions()}
+              className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              <RefreshCw className="h-4 w-4" />
+              <span>Refresh Predictions</span>
+            </button>
           )}
         </div>
       </div>
 
-  // Simplified Job Site Overview for Dashboard
-  const JobSiteOverview = () => {
-    return (
+      {isTraining && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm text-gray-600">Training Progress</span>
+            <span className="text-sm text-gray-600">{trainingProgress.toFixed(0)}%</span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className="bg-purple-600 h-2 rounded-full transition-all duration-300"
+              style={{ width: `${trainingProgress}%` }}
+            />
+          </div>
+          <p className="text-xs text-gray-500 mt-1">
+            Training neural network on 90 days of sensor data...
+          </p>
+        </div>
+      )}
+
+      {mlModel && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+          <div className="text-center p-3 bg-blue-50 rounded">
+            <p className="text-2xl font-bold text-blue-600">{modelMetrics.accuracy}%</p>
+            <p className="text-sm text-gray-600">Accuracy</p>
+          </div>
+          <div className="text-center p-3 bg-green-50 rounded">
+            <p className="text-2xl font-bold text-green-600">{modelMetrics.precision}%</p>
+            <p className="text-sm text-gray-600">Precision</p>
+          </div>
+          <div className="text-center p-3 bg-purple-50 rounded">
+            <p className="text-2xl font-bold text-purple-600">{modelMetrics.recall}%</p>
+            <p className="text-sm text-gray-600">Recall</p>
+          </div>
+          <div className="text-center p-3 bg-orange-50 rounded">
+            <p className="text-2xl font-bold text-orange-600">{modelMetrics.f1Score}%</p>
+            <p className="text-sm text-gray-600">F1 Score</p>
+          </div>
+        </div>
+      )}
+
+      {!mlModel && !isTraining && (
+        <div className="text-center py-8 text-gray-500">
+          <Brain className="h-12 w-12 mx-auto mb-2 text-gray-400" />
+          <p>No ML model trained yet. Click "Train Model" to start predictive maintenance.</p>
+        </div>
+      )}
+    </div>
+
+    {/* ML Predictions Section */}
+    {mlPredictions.length > 0 && (
       <div className="bg-white rounded-lg shadow p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-lg font-semibold">Job Sites Overview</h3>
+            <h3 className="text-lg font-semibold">🧠 AI Maintenance Predictions</h3>
             <p className="text-sm text-gray-600">
-              {dashboardData.jobSites.length} active sites
+              Real-time failure risk analysis for equipment fleet
             </p>
           </div>
-          <button 
-            onClick={() => setActiveModule('equipment')}
-            className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-          >
-            View Full Map
-          </button>
+          <div className="flex items-center space-x-2 text-sm text-gray-600">
+            <Clock className="h-4 w-4" />
+            <span>Updated: {mlPredictions.length > 0 ? new Date(mlPredictions[0].lastUpdated).toLocaleTimeString() : 'Never'}</span>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {dashboardData.jobSites.map((site, index) => (
-            <div key={index} className="border rounded-lg p-4">
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="font-medium text-sm">{site.name}</h4>
-                <span className="text-xs text-gray-500">{site.equipment} units</span>
-              </div>
-              <div className="space-y-1 text-xs text-gray-600">
-                <p>Manager: {site.manager}</p>
-                <p>Work Areas: {site.areas}</p>
-                <div className="flex items-center space-x-2 mt-2">
-                  <div className="flex-1 bg-gray-200 rounded-full h-1.5">
-                    <div 
-                      className="bg-green-500 h-1.5 rounded-full" 
-                      style={{ width: `${85 + Math.random() * 15}%` }}
-                    ></div>
+        <div className="space-y-3">
+          {mlPredictions.map((prediction) => (
+            <div key={prediction.equipmentId} className="border rounded-lg p-4">
+              <div className="grid grid-cols-1 md:grid-cols-6 gap-4 items-center">
+                <div>
+                  <h4 className="font-medium">{prediction.equipmentId}</h4>
+                  <p className="text-sm text-gray-600">Equipment ID</p>
+                </div>
+                
+                <div className="text-center">
+                  <div className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                    prediction.riskLevel === 'high' ? 'bg-red-100 text-red-800' :
+                    prediction.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-green-100 text-green-800'
+                  }`}>
+                    {prediction.riskLevel.toUpperCase()}
                   </div>
-                  <span className="text-xs">92% active</span>
+                  <p className="text-xs text-gray-600 mt-1">Risk Level</p>
+                </div>
+                
+                <div className="text-center">
+                  <p className="text-lg font-bold">{prediction.failureProbability}%</p>
+                  <p className="text-xs text-gray-600">Failure Risk</p>
+                </div>
+                
+                <div className="text-center">
+                  <p className="text-lg font-bold">{prediction.daysUntilMaintenance}</p>
+                  <p className="text-xs text-gray-600">Days to Maintenance</p>
+                </div>
+                
+                <div className="col-span-2">
+                  <p className="text-sm font-medium mb-2">{prediction.recommendedAction}</p>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <span>Temp: {prediction.sensors.temperature}°F</span>
+                    <span>Vibration: {prediction.sensors.vibration}g</span>
+                    <span>Pressure: {prediction.sensors.pressure} PSI</span>
+                    <span>Current: {prediction.sensors.current}A</span>
+                  </div>
                 </div>
               </div>
             </div>
           ))}
         </div>
+      </div>
+    )}
 
-        {connectionStatus === 'connected' && (
-          <div className="mt-4 p-3 bg-blue-50 rounded-lg">
-            <p className="text-sm text-blue-800">
-              <strong>🔗 Live Data:</strong> Site information updated from Snowflake database.
-              Click "View Full Map" for detailed equipment tracking.
-            </p>
+    {/* Equipment Categories */}
+    <div className="bg-white rounded-lg shadow p-6">
+      <h3 className="text-lg font-semibold mb-4">Equipment Categories</h3>
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {dashboardData.equipmentCategories.map((category, index) => {
+          const Icon = category.icon;
+          return (
+            <div key={index} className="flex items-center p-4 border rounded-lg">
+              <div className={`p-3 rounded-lg ${category.color} text-white mr-4`}>
+                <Icon className="h-6 w-6" />
+              </div>
+              <div>
+                <h4 className="font-medium text-sm">{category.name}</h4>
+                <p className="text-sm text-gray-600">{category.count} units</p>
+                <p className="text-xs text-gray-500">{category.fuelType}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+
+    {/* Priority Alerts & Predictions */}
+    <div className="bg-white rounded-lg shadow p-6">
+      <h3 className="text-lg font-semibold mb-4">Priority Alerts & Predictions</h3>
+      <div className="space-y-3">
+        {[...dashboardData.alerts, ...mlPredictions
+          .filter(p => p.riskLevel === 'high')
+          .map(p => ({
+            id: `ml-${p.equipmentId}`,
+            equipment: p.equipmentId,
+            severity: 'critical',
+            message: `AI Prediction: ${p.recommendedAction} (${p.failureProbability}% failure risk)`,
+            site: 'Multiple Sites',
+            createdAt: p.lastUpdated,
+            isMLPrediction: true
+          }))
+        ].length > 0 ? 
+        [...dashboardData.alerts, ...mlPredictions
+          .filter(p => p.riskLevel === 'high')
+          .map(p => ({
+            id: `ml-${p.equipmentId}`,
+            equipment: p.equipmentId,
+            severity: 'critical',
+            message: `AI Prediction: ${p.recommendedAction} (${p.failureProbability}% failure risk)`,
+            site: 'Multiple Sites',
+            createdAt: p.lastUpdated,
+            isMLPrediction: true
+          }))
+        ].map((alert) => (
+          <div key={alert.id} className="flex items-center justify-between p-3 border rounded-lg">
+            <div className="flex items-center space-x-3">
+              <div className={`w-3 h-3 rounded-full ${
+                alert.severity === 'critical' ? 'bg-red-500' : 
+                alert.severity === 'high' ? 'bg-yellow-500' : 'bg-orange-500'
+              }`} />
+              {alert.isMLPrediction && <Brain className="h-4 w-4 text-purple-600" />}
+              <div>
+                <p className="font-medium text-sm">{alert.equipment}</p>
+                <p className="text-sm text-gray-600">{alert.message}</p>
+                <p className="text-xs text-gray-500">
+                  {alert.site} {alert.isMLPrediction && '• AI Prediction'}
+                </p>
+              </div>
+            </div>
+            <div className="flex space-x-2">
+              <button className="px-3 py-1 bg-blue-600 text-white text-sm rounded">
+                View
+              </button>
+              <button className="px-3 py-1 bg-green-600 text-white text-sm rounded">
+                {alert.isMLPrediction ? 'Schedule' : 'Service'}
+              </button>
+            </div>
+          </div>
+        )) : (
+          <div className="text-center py-8 text-gray-500">
+            <CheckCircle className="h-12 w-12 mx-auto mb-2 text-green-500" />
+            <p>No active alerts - all equipment operational</p>
+            {mlModel && <p className="text-sm">AI monitoring active for predictive maintenance</p>}
           </div>
         )}
       </div>
-    );
-  };
     </div>
-  );
 
+    {/* Job Sites Overview */}
+    <JobSiteOverview 
+      dashboardData={dashboardData}
+      connectionStatus={connectionStatus}
+      mlModel={mlModel}
+      setActiveModule={setActiveModule}
+    />
+  </div>
+);
+ 
   // Enhanced Maintenance Module with ML integration
   const MaintenanceModule = () => (
     <div className="space-y-6">
@@ -1158,7 +1187,7 @@ const MultiquipPlatform = () => {
     </div>
   );
 
-  // Enhanced Equipment Module with Full-Screen Map
+ // Enhanced Equipment Module with Full-Screen Map
   const EquipmentModule = () => {
     const [selectedSite, setSelectedSite] = useState('Downtown Infrastructure Project');
     const [selectedEquipment, setSelectedEquipment] = useState(null);
@@ -1648,7 +1677,7 @@ const MultiquipPlatform = () => {
     );
   };
 
-  const AlertsModule = () => (
+const AlertsModule = () => (
     <div className="bg-white rounded-lg shadow p-6">
       <h2 className="text-xl font-semibold mb-4">IoT Alerts Management</h2>
       <p className="text-gray-600">Real-time alerts from equipment sensors</p>
