@@ -1974,12 +1974,391 @@ const DashboardModule = () => (
   );
 };
 
-const AlertsModule = () => (
-    <div className="bg-white rounded-lg shadow p-6">
-      <h2 className="text-xl font-semibold mb-4">IoT Alerts Management</h2>
-      <p className="text-gray-600">Real-time alerts from equipment sensors</p>
+const AlertsModule = () => {
+  const [alertFilter, setAlertFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('priority');
+  
+  // Combine regular alerts and ML predictions into unified alert format
+  const getAllAlerts = () => {
+    const regularAlerts = dashboardData.alerts.map(alert => ({
+      id: alert.id,
+      equipmentId: alert.equipment,
+      severity: alert.severity,
+      message: alert.message,
+      site: alert.site,
+      createdAt: alert.createdAt,
+      type: 'sensor',
+      status: 'active',
+      priority: alert.severity === 'critical' ? 1 : alert.severity === 'high' ? 2 : 3,
+      icon: '⚠️',
+      color: alert.severity === 'critical' ? 'bg-red-50 border-red-200' : 
+             alert.severity === 'high' ? 'bg-orange-50 border-orange-200' : 'bg-yellow-50 border-yellow-200'
+    }));
+
+    const mlAlerts = mlPredictions
+      .filter(p => p.riskLevel !== 'low')
+      .map(p => ({
+        id: `ml-${p.equipmentId}`,
+        equipmentId: p.equipmentId,
+        severity: p.riskLevel === 'high' ? 'critical' : 'high',
+        message: `AI Prediction: ${p.recommendedAction} (${p.failureProbability}% failure risk)`,
+        site: 'Multiple Sites',
+        createdAt: p.lastUpdated,
+        type: 'ai_prediction',
+        status: 'active',
+        priority: p.riskLevel === 'high' ? 1 : 2,
+        icon: '🧠',
+        color: p.riskLevel === 'high' ? 'bg-purple-50 border-purple-200' : 'bg-blue-50 border-blue-200',
+        mlData: p
+      }));
+
+    // Add some additional sensor alerts for demo
+    const additionalAlerts = [
+      {
+        id: 'TEMP-001',
+        equipmentId: 'GEN-567',
+        severity: 'high',
+        message: 'Temperature sensor reading above threshold (92°F)',
+        site: 'Commercial Complex Build',
+        createdAt: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+        type: 'sensor',
+        status: 'active',
+        priority: 2,
+        icon: '🌡️',
+        color: 'bg-orange-50 border-orange-200'
+      },
+      {
+        id: 'VIB-001',
+        equipmentId: 'COM-789',
+        severity: 'medium',
+        message: 'Vibration levels elevated during compaction cycle',
+        site: 'Highway Expansion Phase 2',
+        createdAt: new Date(Date.now() - 45 * 60 * 1000).toISOString(),
+        type: 'sensor',
+        status: 'active',
+        priority: 3,
+        icon: '📳',
+        color: 'bg-yellow-50 border-yellow-200'
+      },
+      {
+        id: 'FUEL-001',
+        equipmentId: 'MIX-445',
+        severity: 'medium',
+        message: 'Fuel level below 20% - refuel recommended',
+        site: 'Downtown Infrastructure Project',
+        createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        type: 'sensor',
+        status: 'active',
+        priority: 3,
+        icon: '⛽',
+        color: 'bg-yellow-50 border-yellow-200'
+      }
+    ];
+
+    return [...regularAlerts, ...mlAlerts, ...additionalAlerts];
+  };
+
+  const allAlerts = getAllAlerts();
+  
+  // Filter alerts
+  const filteredAlerts = allAlerts.filter(alert => {
+    if (alertFilter === 'all') return true;
+    if (alertFilter === 'critical') return alert.severity === 'critical';
+    if (alertFilter === 'high') return alert.severity === 'high';
+    if (alertFilter === 'medium') return alert.severity === 'medium';
+    if (alertFilter === 'ai') return alert.type === 'ai_prediction';
+    if (alertFilter === 'sensor') return alert.type === 'sensor';
+    return true;
+  });
+
+  // Sort alerts
+  const sortedAlerts = filteredAlerts.sort((a, b) => {
+    if (sortBy === 'priority') return a.priority - b.priority;
+    if (sortBy === 'time') return new Date(b.createdAt) - new Date(a.createdAt);
+    if (sortBy === 'equipment') return a.equipmentId.localeCompare(b.equipmentId);
+    return 0;
+  });
+
+  const getAlertStats = () => {
+    const critical = allAlerts.filter(a => a.severity === 'critical').length;
+    const high = allAlerts.filter(a => a.severity === 'high').length;
+    const medium = allAlerts.filter(a => a.severity === 'medium').length;
+    const aiPredictions = allAlerts.filter(a => a.type === 'ai_prediction').length;
+    const sensorAlerts = allAlerts.filter(a => a.type === 'sensor').length;
+    
+    return { critical, high, medium, aiPredictions, sensorAlerts, total: allAlerts.length };
+  };
+
+  const stats = getAlertStats();
+
+  const handleResolveAlert = (alertId) => {
+    console.log(`Resolving alert: ${alertId}`);
+    // In a real application, this would update the alert status
+  };
+
+  const handleScheduleMaintenance = (alert) => {
+    console.log(`Scheduling maintenance for: ${alert.equipmentId}`);
+    // In a real application, this would create a work order
+  };
+
+  const getTimeSince = (timestamp) => {
+    const now = new Date();
+    const alertTime = new Date(timestamp);
+    const diffInMinutes = Math.floor((now - alertTime) / (1000 * 60));
+    
+    if (diffInMinutes < 1) return 'Just now';
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`;
+    if (diffInMinutes < 1440) return `${Math.floor(diffInMinutes / 60)}h ago`;
+    return `${Math.floor(diffInMinutes / 1440)}d ago`;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header Section */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-semibold flex items-center space-x-2">
+              <AlertTriangle className="h-6 w-6 text-red-600" />
+              <span>IoT Alerts Management</span>
+            </h2>
+            <p className="text-gray-600">Real-time alerts from equipment sensors and AI predictions</p>
+          </div>
+          <div className="flex items-center space-x-2">
+            {connectionStatus === 'connected' && (
+              <span className="px-3 py-1 bg-green-100 text-green-800 text-sm rounded-full">
+                Live Data
+              </span>
+            )}
+            {mlModel && (
+              <span className="px-3 py-1 bg-purple-100 text-purple-800 text-sm rounded-full">
+                AI Active
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Alert Statistics */}
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <p className="text-2xl font-bold text-gray-700">{stats.total}</p>
+            <p className="text-sm text-gray-600">Total Alerts</p>
+          </div>
+          <div className="text-center p-3 bg-red-50 rounded-lg">
+            <p className="text-2xl font-bold text-red-600">{stats.critical}</p>
+            <p className="text-sm text-gray-600">Critical</p>
+          </div>
+          <div className="text-center p-3 bg-orange-50 rounded-lg">
+            <p className="text-2xl font-bold text-orange-600">{stats.high}</p>
+            <p className="text-sm text-gray-600">High Priority</p>
+          </div>
+          <div className="text-center p-3 bg-yellow-50 rounded-lg">
+            <p className="text-2xl font-bold text-yellow-600">{stats.medium}</p>
+            <p className="text-sm text-gray-600">Medium</p>
+          </div>
+          <div className="text-center p-3 bg-purple-50 rounded-lg">
+            <p className="text-2xl font-bold text-purple-600">{stats.aiPredictions}</p>
+            <p className="text-sm text-gray-600">AI Predictions</p>
+          </div>
+          <div className="text-center p-3 bg-blue-50 rounded-lg">
+            <p className="text-2xl font-bold text-blue-600">{stats.sensorAlerts}</p>
+            <p className="text-sm text-gray-600">Sensor Alerts</p>
+          </div>
+        </div>
+
+        {/* Filters and Controls */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Filter by:</label>
+              <select 
+                value={alertFilter}
+                onChange={(e) => setAlertFilter(e.target.value)}
+                className="border border-gray-300 rounded-md px-3 py-1 text-sm"
+              >
+                <option value="all">All Alerts ({stats.total})</option>
+                <option value="critical">Critical ({stats.critical})</option>
+                <option value="high">High Priority ({stats.high})</option>
+                <option value="medium">Medium ({stats.medium})</option>
+                <option value="ai">AI Predictions ({stats.aiPredictions})</option>
+                <option value="sensor">Sensor Alerts ({stats.sensorAlerts})</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Sort by:</label>
+              <select 
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="border border-gray-300 rounded-md px-3 py-1 text-sm"
+              >
+                <option value="priority">Priority</option>
+                <option value="time">Most Recent</option>
+                <option value="equipment">Equipment ID</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex space-x-2">
+            <button className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+              Export Alerts
+            </button>
+            <button 
+              onClick={loadDataFromSnowflake}
+              disabled={loading}
+              className="px-3 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-700 disabled:opacity-50"
+            >
+              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Alerts List */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Active Alerts</h3>
+          <span className="text-sm text-gray-600">
+            Showing {sortedAlerts.length} of {stats.total} alerts
+          </span>
+        </div>
+
+        {sortedAlerts.length === 0 ? (
+          <div className="text-center py-12">
+            <CheckCircle className="h-12 w-12 mx-auto mb-4 text-green-500" />
+            <p className="text-lg text-gray-600">No alerts found</p>
+            <p className="text-sm text-gray-500">All equipment is operating normally</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {sortedAlerts.map((alert) => (
+              <div key={alert.id} className={`border rounded-lg p-4 ${alert.color}`}>
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start space-x-3 flex-1">
+                    <div className="text-2xl">{alert.icon}</div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center space-x-2 mb-1">
+                        <h4 className="font-medium text-lg">{alert.equipmentId}</h4>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${
+                          alert.severity === 'critical' ? 'bg-red-100 text-red-800' :
+                          alert.severity === 'high' ? 'bg-orange-100 text-orange-800' :
+                          'bg-yellow-100 text-yellow-800'
+                        }`}>
+                          {alert.severity.toUpperCase()}
+                        </span>
+                        {alert.type === 'ai_prediction' && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-purple-100 text-purple-800">
+                            AI PREDICTION
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-gray-800 mb-2">{alert.message}</p>
+                      <div className="flex items-center space-x-4 text-sm text-gray-600">
+                        <span className="flex items-center space-x-1">
+                          <Activity className="h-3 w-3" />
+                          <span>{alert.site}</span>
+                        </span>
+                        <span className="flex items-center space-x-1">
+                          <Clock className="h-3 w-3" />
+                          <span>{getTimeSince(alert.createdAt)}</span>
+                        </span>
+                        {alert.type === 'sensor' && (
+                          <span className="flex items-center space-x-1">
+                            <Zap className="h-3 w-3" />
+                            <span>Sensor Alert</span>
+                          </span>
+                        )}
+                      </div>
+                      
+                      {/* Additional ML Prediction Details */}
+                      {alert.mlData && (
+                        <div className="mt-3 p-3 bg-white/70 rounded border">
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                            <div>
+                              <span className="text-gray-600">Failure Risk:</span>
+                              <span className="ml-2 font-medium">{alert.mlData.failureProbability}%</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Days to Maintenance:</span>
+                              <span className="ml-2 font-medium">{alert.mlData.daysUntilMaintenance}</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Temperature:</span>
+                              <span className="ml-2 font-medium">{alert.mlData.sensors.temperature}°F</span>
+                            </div>
+                            <div>
+                              <span className="text-gray-600">Vibration:</span>
+                              <span className="ml-2 font-medium">{alert.mlData.sensors.vibration}g</span>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  
+                  {/* Action Buttons */}
+                  <div className="flex flex-col space-y-2 ml-4">
+                    <button 
+                      onClick={() => handleResolveAlert(alert.id)}
+                      className="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 flex items-center space-x-1"
+                    >
+                      <CheckCircle className="h-3 w-3" />
+                      <span>Resolve</span>
+                    </button>
+                    <button 
+                      onClick={() => handleScheduleMaintenance(alert)}
+                      className="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center space-x-1"
+                    >
+                      <Wrench className="h-3 w-3" />
+                      <span>Schedule</span>
+                    </button>
+                    <button className="px-3 py-1 bg-gray-600 text-white text-sm rounded hover:bg-gray-700 flex items-center space-x-1">
+                      <Activity className="h-3 w-3" />
+                      <span>Details</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Quick Actions */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <h3 className="text-lg font-semibold mb-4">Quick Actions</h3>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <button className="p-4 border rounded-lg hover:bg-gray-50 text-left">
+            <div className="flex items-center space-x-2 mb-2">
+              <AlertTriangle className="h-5 w-5 text-red-600" />
+              <span className="font-medium">Critical Alert Response</span>
+            </div>
+            <p className="text-sm text-gray-600">Emergency response protocol for critical equipment failures</p>
+          </button>
+          <button className="p-4 border rounded-lg hover:bg-gray-50 text-left">
+            <div className="flex items-center space-x-2 mb-2">
+              <Brain className="h-5 w-5 text-purple-600" />
+              <span className="font-medium">AI Maintenance Scheduler</span>
+            </div>
+            <p className="text-sm text-gray-600">Schedule maintenance based on AI predictions</p>
+          </button>
+          <button className="p-4 border rounded-lg hover:bg-gray-50 text-left">
+            <div className="flex items-center space-x-2 mb-2">
+              <BarChart3 className="h-5 w-5 text-blue-600" />
+              <span className="font-medium">Alert Analytics</span>
+            </div>
+            <p className="text-sm text-gray-600">Analyze alert patterns and equipment trends</p>
+          </button>
+          <button className="p-4 border rounded-lg hover:bg-gray-50 text-left">
+            <div className="flex items-center space-x-2 mb-2">
+              <Settings className="h-5 w-5 text-gray-600" />
+              <span className="font-medium">Alert Configuration</span>
+            </div>
+            <p className="text-sm text-gray-600">Configure alert thresholds and notification rules</p>
+          </button>
+        </div>
+      </div>
     </div>
   );
+};
 
   const AIModule = () => (
     <div className="bg-white rounded-lg shadow p-6">
