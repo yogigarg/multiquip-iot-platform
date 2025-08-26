@@ -44,6 +44,153 @@ import snowflakeAPI from './services/SnowflakeAPIService';
 import * as tf from '@tensorflow/tfjs';
 
 
+const analyzeRootCause = (equipment) => {
+  const issues = [];
+  
+  // Analyze ML prediction sensors if available
+  if (equipment.mlPrediction?.sensors) {
+    const sensors = equipment.mlPrediction.sensors;
+    
+    // Temperature analysis
+    const temp = parseFloat(sensors.temperature);
+    if (temp > 95) {
+      issues.push({
+        type: 'critical',
+        sensor: 'Temperature',
+        current: `${temp}°F`,
+        threshold: '95°F',
+        status: 'CRITICAL - Overheating detected',
+        impact: 'Engine damage risk, immediate shutdown recommended',
+        icon: '🌡️',
+        color: 'text-red-600 bg-red-50 border-red-200'
+      });
+    } else if (temp > 85) {
+      issues.push({
+        type: 'warning',
+        sensor: 'Temperature',
+        current: `${temp}°F`,
+        threshold: '85°F',
+        status: 'HIGH - Above normal range',
+        impact: 'Reduced efficiency, maintenance required',
+        icon: '🌡️',
+        color: 'text-yellow-600 bg-yellow-50 border-yellow-200'
+      });
+    }
+    
+    // Vibration analysis
+    const vibration = parseFloat(sensors.vibration);
+    if (vibration > 2.0) {
+      issues.push({
+        type: 'critical',
+        sensor: 'Vibration',
+        current: `${vibration}g`,
+        threshold: '2.0g',
+        status: 'CRITICAL - Excessive vibration',
+        impact: 'Mechanical failure imminent, stop operation',
+        icon: '📳',
+        color: 'text-red-600 bg-red-50 border-red-200'
+      });
+    } else if (vibration > 1.5) {
+      issues.push({
+        type: 'warning',
+        sensor: 'Vibration',
+        current: `${vibration}g`,
+        threshold: '1.5g',
+        status: 'HIGH - Unusual vibration levels',
+        impact: 'Bearing or alignment issues, inspect soon',
+        icon: '📳',
+        color: 'text-yellow-600 bg-yellow-50 border-yellow-200'
+      });
+    }
+    
+    // Pressure analysis
+    const pressure = parseFloat(sensors.pressure);
+    if (pressure > 180 || pressure < 80) {
+      issues.push({
+        type: pressure > 180 ? 'critical' : 'warning',
+        sensor: 'Pressure',
+        current: `${pressure} PSI`,
+        threshold: '80-180 PSI',
+        status: pressure > 180 ? 'CRITICAL - Pressure too high' : 'LOW - Pressure below minimum',
+        impact: pressure > 180 ? 'System damage risk, reduce load' : 'Performance degradation, check filters',
+        icon: '🔘',
+        color: pressure > 180 ? 'text-red-600 bg-red-50 border-red-200' : 'text-yellow-600 bg-yellow-50 border-yellow-200'
+      });
+    }
+    
+    // Current analysis
+    const current = parseFloat(sensors.current);
+    if (current > 25) {
+      issues.push({
+        type: 'warning',
+        sensor: 'Current',
+        current: `${current}A`,
+        threshold: '25A',
+        status: 'HIGH - Electrical overload',
+        impact: 'Motor strain, check electrical connections',
+        icon: '⚡',
+        color: 'text-yellow-600 bg-yellow-50 border-yellow-200'
+      });
+    }
+  }
+  
+  // Analyze equipment status
+  if (equipment.status === 'critical') {
+    issues.push({
+      type: 'critical',
+      sensor: 'System Status',
+      current: 'CRITICAL',
+      threshold: 'OPERATIONAL',
+      status: 'CRITICAL - Equipment malfunction',
+      impact: 'Immediate attention required, safety risk',
+      icon: '⚠️',
+      color: 'text-red-600 bg-red-50 border-red-200'
+    });
+  } else if (equipment.status === 'maintenance') {
+    issues.push({
+      type: 'warning',
+      sensor: 'Maintenance Schedule',
+      current: 'DUE',
+      threshold: 'CURRENT',
+      status: 'Scheduled maintenance overdue',
+      impact: 'Performance degradation, reliability risk',
+      icon: '🔧',
+      color: 'text-yellow-600 bg-yellow-50 border-yellow-200'
+    });
+  }
+  
+  // Analyze uptime
+  if (equipment.uptime < 85) {
+    issues.push({
+      type: 'warning',
+      sensor: 'Uptime',
+      current: `${equipment.uptime.toFixed(1)}%`,
+      threshold: '85%',
+      status: 'LOW - Poor reliability',
+      impact: 'Frequent breakdowns affecting productivity',
+      icon: '📊',
+      color: 'text-yellow-600 bg-yellow-50 border-yellow-200'
+    });
+  }
+  
+  // Analyze operating hours
+  if (equipment.operatingHours > 4000) {
+    issues.push({
+      type: 'info',
+      sensor: 'Operating Hours',
+      current: `${equipment.operatingHours.toFixed(0)}h`,
+      threshold: '4000h',
+      status: 'HIGH - Major service interval approaching',
+      impact: 'Plan for comprehensive maintenance',
+      icon: '🕐',
+      color: 'text-blue-600 bg-blue-50 border-blue-200'
+    });
+  }
+  
+  return issues;
+};
+
+
 const MultiquipPlatform = () => {
   const [activeModule, setActiveModule] = useState('dashboard');
   const [loading, setLoading] = useState(false);
@@ -1188,494 +1335,644 @@ const DashboardModule = () => (
   );
 
  // Enhanced Equipment Module with Full-Screen Map
-  const EquipmentModule = () => {
-    const [selectedSite, setSelectedSite] = useState('Downtown Infrastructure Project');
-    const [selectedEquipment, setSelectedEquipment] = useState(null);
-    const [siteEquipment, setSiteEquipment] = useState([]);
-    const [loadingEquipment, setLoadingEquipment] = useState(false);
-    const [mapView, setMapView] = useState('overview'); // 'overview', 'detailed', 'grid'
+ const EquipmentModule = () => {
+  const [selectedSite, setSelectedSite] = useState('Downtown Infrastructure Project');
+  const [selectedEquipment, setSelectedEquipment] = useState(null);
+  const [siteEquipment, setSiteEquipment] = useState([]);
+  const [loadingEquipment, setLoadingEquipment] = useState(false);
+  const [mapView, setMapView] = useState('overview');
 
-    const loadSiteEquipment = async () => {
-      if (!dashboardData.jobSites.length) return;
+  // Function to generate consistent positioning based on equipment ID
+  const getConsistentPosition = (equipmentId, equipmentType, areaName) => {
+    const hash = equipmentId.split('').reduce((a, b) => {
+      a = ((a << 5) - a) + b.charCodeAt(0);
+      return a & a;
+    }, 0);
+    
+    const areaBounds = {
+      'Excavation': { minX: 10, maxX: 30, minY: 10, maxY: 40 },
+      'Staging': { minX: 40, maxX: 60, minY: 10, maxY: 40 },
+      'Storage': { minX: 70, maxX: 90, minY: 10, maxY: 40 },
+      'Concrete': { minX: 10, maxX: 30, minY: 55, maxY: 85 },
+      'Assembly': { minX: 40, maxX: 60, minY: 55, maxY: 85 },
+      'Access': { minX: 70, maxX: 90, minY: 55, maxY: 85 },
+      'Foundation': { minX: 10, maxX: 30, minY: 55, maxY: 85 },
+      'Structure': { minX: 70, maxX: 90, minY: 55, maxY: 85 }
+    };
+
+    const bounds = areaBounds[areaName] || areaBounds['Staging'];
+    const x = bounds.minX + (Math.abs(hash) % (bounds.maxX - bounds.minX));
+    const y = bounds.minY + (Math.abs(hash >> 8) % (bounds.maxY - bounds.minY));
+    
+    return { x, y };
+  };
+
+  const loadSiteEquipment = async () => {
+    if (!dashboardData.jobSites.length) return;
+    
+    setLoadingEquipment(true);
+    try {
+      console.log(`🏗️ Loading equipment for site: ${selectedSite}`);
+      const data = await snowflakeAPI.getEquipmentData(selectedSite);
       
-      setLoadingEquipment(true);
-      try {
-        const data = await snowflakeAPI.getEquipmentData(selectedSite);
-        setSiteEquipment(data.equipment?.map((e, index) => ({
+      const processedEquipment = data.equipment?.map(e => {
+        const position = getConsistentPosition(e.EQUIPMENT_ID, e.EQUIPMENT_TYPE, e.AREA_NAME);
+        const mlPrediction = mlPredictions.find(p => p.equipmentId === e.EQUIPMENT_ID);
+        
+        return {
           id: e.EQUIPMENT_ID,
           name: e.EQUIPMENT_NAME || e.EQUIPMENT_ID,
-          // Better distribution across the map
-          x: 10 + (index % 8) * 10 + Math.random() * 5, // Spread horizontally
-          y: 15 + Math.floor(index / 8) * 15 + Math.random() * 8, // Spread vertically
-          status: e.STATUS || 'operational',
+          x: position.x,
+          y: position.y,
+          status: e.STATUS ? e.STATUS.toLowerCase() : 'operational',
           area: e.AREA_NAME || 'Unknown Area',
-          equipmentType: e.EQUIPMENT_TYPE,
-          uptime: e.UPTIME_PERCENTAGE || 95 + Math.random() * 5,
-          operatingHours: e.OPERATING_HOURS || Math.random() * 5000,
-          mlPrediction: mlPredictions.find(p => p.equipmentId === e.EQUIPMENT_ID),
-          manufacturer: e.MANUFACTURER || 'Unknown',
+          equipmentType: e.EQUIPMENT_TYPE || 'Unknown',
+          uptime: e.UPTIME_PERCENTAGE || 95,
+          operatingHours: e.OPERATING_HOURS || 0,
+          manufacturer: e.MANUFACTURER || 'MULTIQUIP',
           model: e.MODEL || 'Unknown',
-          installationDate: e.INSTALLATION_DATE || '2023-01-01'
-        })) || []);
-      } catch (error) {
-        console.error('Error loading site equipment:', error);
-      } finally {
-        setLoadingEquipment(false);
-      }
-    };
-
-    useEffect(() => {
-      loadSiteEquipment();
-    }, [selectedSite, dashboardData.jobSites, mlPredictions]);
-
-    const getStatusColor = (status, mlPrediction) => {
-      if (mlPrediction?.riskLevel === 'high') return '#EF4444';
-      if (mlPrediction?.riskLevel === 'medium') return '#F59E0B';
+          installationDate: e.INSTALLATION_DATE || '2023-01-01',
+          mlPrediction: mlPrediction,
+          maintenancePriority: mlPrediction?.riskLevel === 'high' ? 'urgent' :
+                              mlPrediction?.riskLevel === 'medium' ? 'soon' :
+                              e.STATUS === 'maintenance' ? 'scheduled' : 'none'
+        };
+      }) || [];
       
-      switch(status) {
-        case 'critical': return '#EF4444';
-        case 'maintenance': return '#F59E0B';
-        case 'idle': return '#6B7280';
-        default: return '#10B981';
-      }
-    };
+      setSiteEquipment(processedEquipment);
+      console.log(`✅ Processed ${processedEquipment.length} equipment items`);
+      
+    } catch (error) {
+      console.error('❌ Error loading site equipment:', error);
+      setSiteEquipment([]);
+    } finally {
+      setLoadingEquipment(false);
+    }
+  };
 
-    const getEquipmentIcon = (type) => {
-      switch(type) {
-        case 'Generators': return '⚡';
-        case 'Water Pumps': return '💧';
-        case 'Compactors': return '🚧';
-        case 'Mixers': return '🌀';
-        default: return '🔧';
-      }
-    };
+  useEffect(() => {
+    loadSiteEquipment();
+  }, [selectedSite, dashboardData.jobSites, mlPredictions]);
 
+  const getStatusColor = (equipment) => {
+    if (equipment.mlPrediction?.riskLevel === 'high') return '#EF4444';
+    if (equipment.mlPrediction?.riskLevel === 'medium') return '#F59E0B';
+    
+    switch(equipment.status) {
+      case 'critical': return '#EF4444';
+      case 'maintenance': return '#F59E0B';
+      case 'idle': return '#6B7280';
+      default: return '#10B981';
+    }
+  };
+
+  const getEquipmentIcon = (type) => {
+    switch(type) {
+      case 'Generators': return 'G';
+      case 'Water Pumps': return 'P';
+      case 'Compactors': return 'C';
+      case 'Mixers': return 'M';
+      default: return 'E';
+    }
+  };
+
+  // Enhanced Equipment Popup Component (Inside EquipmentModule)
+  const EnhancedEquipmentPopup = ({ equipment, onClose }) => {
+    const rootCauses = analyzeRootCause(equipment);
+    const criticalIssues = rootCauses.filter(issue => issue.type === 'critical');
+    const warningIssues = rootCauses.filter(issue => issue.type === 'warning');
+    const infoIssues = rootCauses.filter(issue => issue.type === 'info');
+    
     return (
-      <div className="space-y-6">
-        {/* Header Section */}
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h2 className="text-xl font-semibold flex items-center space-x-2">
-                <Activity className="h-6 w-6 text-blue-600" />
-                <span>Equipment Fleet Management</span>
-              </h2>
-              <p className="text-gray-600">Real-time equipment monitoring and location tracking</p>
-            </div>
-            <div className="flex items-center space-x-4">
-              <select 
-                value={selectedSite}
-                onChange={(e) => setSelectedSite(e.target.value)}
-                className="border rounded px-3 py-2"
-              >
-                {dashboardData.jobSites.map((site, index) => (
-                  <option key={index} value={site.name}>{site.name}</option>
-                ))}
-              </select>
-              <div className="flex bg-gray-100 rounded-lg p-1">
-                <button
-                  onClick={() => setMapView('overview')}
-                  className={`px-3 py-1 rounded text-sm ${mapView === 'overview' ? 'bg-white shadow' : ''}`}
-                >
-                  Overview
-                </button>
-                <button
-                  onClick={() => setMapView('detailed')}
-                  className={`px-3 py-1 rounded text-sm ${mapView === 'detailed' ? 'bg-white shadow' : ''}`}
-                >
-                  Detailed
-                </button>
-                <button
-                  onClick={() => setMapView('grid')}
-                  className={`px-3 py-1 rounded text-sm ${mapView === 'grid' ? 'bg-white shadow' : ''}`}
-                >
-                  Grid View
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Status Cards */}
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
-            <div className="text-center p-3 bg-blue-50 rounded-lg">
-              <p className="text-2xl font-bold text-blue-600">{siteEquipment.length}</p>
-              <p className="text-sm text-gray-600">Total Units</p>
-            </div>
-            <div className="text-center p-3 bg-green-50 rounded-lg">
-              <p className="text-2xl font-bold text-green-600">
-                {siteEquipment.filter(e => e.status === 'operational' && (!e.mlPrediction || e.mlPrediction.riskLevel === 'low')).length}
-              </p>
-              <p className="text-sm text-gray-600">Operational</p>
-            </div>
-            <div className="text-center p-3 bg-yellow-50 rounded-lg">
-              <p className="text-2xl font-bold text-yellow-600">
-                {siteEquipment.filter(e => e.status === 'maintenance' || e.mlPrediction?.riskLevel === 'medium').length}
-              </p>
-              <p className="text-sm text-gray-600">Maintenance</p>
-            </div>
-            <div className="text-center p-3 bg-red-50 rounded-lg">
-              <p className="text-2xl font-bold text-red-600">
-                {siteEquipment.filter(e => e.status === 'critical' || e.mlPrediction?.riskLevel === 'high').length}
-              </p>
-              <p className="text-sm text-gray-600">Critical</p>
-            </div>
-            <div className="text-center p-3 bg-gray-50 rounded-lg">
-              <p className="text-2xl font-bold text-gray-600">
-                {siteEquipment.filter(e => e.status === 'idle').length}
-              </p>
-              <p className="text-sm text-gray-600">Idle</p>
-            </div>
-            <div className="text-center p-3 bg-purple-50 rounded-lg">
-              <p className="text-2xl font-bold text-purple-600">
-                {mlPredictions.filter(p => p.riskLevel === 'high').length}
-              </p>
-              <p className="text-sm text-gray-600">AI Alerts</p>
-            </div>
-          </div>
-
-          {connectionStatus === 'connected' && (
-            <div className="p-3 bg-green-50 rounded-lg">
-              <p className="text-sm text-green-800">
-                <strong>🔗 Live Data:</strong> Equipment locations and status updated in real-time from Snowflake database.
-                {mlModel && <span className="ml-2">🧠 AI predictions active for maintenance forecasting.</span>}
-              </p>
-            </div>
-          )}
+      <div className="absolute top-4 right-4 bg-white rounded-lg shadow-xl border p-4 w-96 max-h-[500px] overflow-y-auto z-50">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="font-semibold text-lg">{equipment.name}</h4>
+          <button onClick={onClose}>
+            <XCircle className="h-5 w-5 text-gray-400 hover:text-gray-600" />
+          </button>
         </div>
-
-        {/* Full-Screen Map */}
-        {mapView !== 'grid' && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Live Job Site Map - {selectedSite}</h3>
-              <div className="flex items-center space-x-3">
-                {loadingEquipment && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
-                <span className="text-sm text-gray-600">{siteEquipment.length} units tracked</span>
-              </div>
-            </div>
-
-            <div className="relative bg-gray-100 rounded-lg" style={{ height: mapView === 'detailed' ? '600px' : '450px' }}>
-              <svg width="100%" height="100%" viewBox="0 0 100 100" className="w-full h-full">
-                {/* Background grid */}
-                <defs>
-                  <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
-                    <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#E5E7EB" strokeWidth="0.2"/>
-                  </pattern>
-                </defs>
-                <rect width="100" height="100" fill="url(#grid)" />
-                
-                {/* Site areas */}
-                <rect x="5" y="5" width="25" height="40" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
-                <rect x="35" y="5" width="25" height="40" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
-                <rect x="65" y="5" width="30" height="40" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
-                <rect x="5" y="50" width="25" height="45" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
-                <rect x="35" y="50" width="25" height="45" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
-                <rect x="65" y="50" width="30" height="45" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
-                
-                {/* Area labels */}
-                <text x="17.5" y="15" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Excavation Zone</text>
-                <text x="47.5" y="15" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Staging Area</text>
-                <text x="80" y="15" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Storage</text>
-                <text x="17.5" y="60" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Concrete Works</text>
-                <text x="47.5" y="60" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Assembly</text>
-                <text x="80" y="60" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Access Roads</text>
-
-                {/* Equipment markers */}
-                {siteEquipment.map((item) => (
-                  <g key={item.id}>
-                    {/* Equipment circle */}
-                    <circle
-                      cx={item.x}
-                      cy={item.y}
-                      r={mapView === 'detailed' ? "2.5" : "2"}
-                      fill={getStatusColor(item.status, item.mlPrediction)}
-                      stroke="#FFFFFF"
-                      strokeWidth="0.5"
-                      className="cursor-pointer transition-all duration-200 hover:r-3"
-                      onClick={() => setSelectedEquipment(item)}
-                    />
-                    
-                    {/* AI prediction indicator */}
-                    {item.mlPrediction?.riskLevel === 'high' && (
-                      <circle
-                        cx={item.x}
-                        cy={item.y}
-                        r="3.5"
-                        fill="none"
-                        stroke="#EF4444"
-                        strokeWidth="0.4"
-                        className="animate-pulse"
-                      />
-                    )}
-                    
-                    {/* Equipment type icon */}
-                    <text 
-                      x={item.x} 
-                      y={item.y + 1} 
-                      textAnchor="middle" 
-                      fontSize={mapView === 'detailed' ? "1.8" : "1.4"} 
-                      fill="#FFFFFF"
-                      fontWeight="bold"
-                      className="pointer-events-none"
-                    >
-                      {item.equipmentType === 'Generators' ? 'G' :
-                       item.equipmentType === 'Water Pumps' ? 'P' :
-                       item.equipmentType === 'Compactors' ? 'C' : 'M'}
-                    </text>
-                    
-                    {/* Equipment ID label */}
-                    {mapView === 'detailed' && (
-                      <text 
-                        x={item.x} 
-                        y={item.y - 4} 
-                        textAnchor="middle" 
-                        fontSize="1" 
-                        fill="#374151"
-                        className="pointer-events-none"
-                      >
-                        {item.id}
-                      </text>
-                    )}
-                  </g>
-                ))}
-              </svg>
-
-              {/* Equipment details popup */}
-              {selectedEquipment && (
-                <div className="absolute top-4 right-4 bg-white rounded-lg shadow-xl border p-4 w-80 max-h-96 overflow-y-auto">
-                  <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-semibold text-lg">{selectedEquipment.name}</h4>
-                    <button onClick={() => setSelectedEquipment(null)}>
-                      <XCircle className="h-5 w-5 text-gray-400 hover:text-gray-600" />
-                    </button>
-                  </div>
-                  
-                  <div className="space-y-3">
-                    {/* Basic Info */}
-                    <div className="grid grid-cols-2 gap-3 text-sm">
-                      <div>
-                        <span className="text-gray-600">ID:</span>
-                        <span className="ml-2 font-medium">{selectedEquipment.id}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Type:</span>
-                        <span className="ml-2">{selectedEquipment.equipmentType}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Area:</span>
-                        <span className="ml-2">{selectedEquipment.area}</span>
-                      </div>
-                      <div>
-                        <span className="text-gray-600">Status:</span>
-                        <span className={`ml-2 px-2 py-0.5 rounded text-xs ${
-                          selectedEquipment.status === 'critical' ? 'bg-red-100 text-red-800' :
-                          selectedEquipment.status === 'maintenance' ? 'bg-yellow-100 text-yellow-800' :
-                          selectedEquipment.status === 'idle' ? 'bg-gray-100 text-gray-800' :
-                          'bg-green-100 text-green-800'
-                        }`}>
-                          {selectedEquipment.status}
+        
+        <div className="space-y-4">
+          {/* Root Cause Analysis Section */}
+          {rootCauses.length > 0 && (
+            <div className="border-t pt-3">
+              <h5 className="font-medium mb-3 flex items-center">
+                <AlertTriangle className="h-4 w-4 text-red-500 mr-2" />
+                Root Cause Analysis
+              </h5>
+              
+              {/* Critical Issues */}
+              {criticalIssues.map((issue, index) => (
+                <div key={`critical-${index}`} className={`mb-3 p-3 border rounded-lg ${issue.color}`}>
+                  <div className="flex items-start space-x-2">
+                    <span className="text-lg">{issue.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-sm">{issue.sensor}</span>
+                        <span className="text-xs font-bold px-2 py-1 bg-red-100 text-red-800 rounded">
+                          CRITICAL
                         </span>
                       </div>
-                    </div>
-
-                    {/* Performance Metrics */}
-                    <div className="border-t pt-3">
-                      <h5 className="font-medium mb-2">Performance</h5>
-                      <div className="grid grid-cols-2 gap-3 text-sm">
+                      <div className="grid grid-cols-2 gap-2 text-xs mb-2">
                         <div>
-                          <span className="text-gray-600">Uptime:</span>
-                          <span className="ml-2 font-medium">{selectedEquipment.uptime.toFixed(1)}%</span>
+                          <span className="text-gray-600">Current:</span>
+                          <span className="ml-1 font-bold text-red-600">{issue.current}</span>
                         </div>
                         <div>
-                          <span className="text-gray-600">Hours:</span>
-                          <span className="ml-2">{selectedEquipment.operatingHours.toFixed(0)}h</span>
+                          <span className="text-gray-600">Threshold:</span>
+                          <span className="ml-1">{issue.threshold}</span>
                         </div>
                       </div>
+                      <p className="text-xs font-medium mb-1">{issue.status}</p>
+                      <p className="text-xs text-gray-700 bg-white/70 p-2 rounded">
+                        <strong>Impact:</strong> {issue.impact}
+                      </p>
                     </div>
-                    
-                    {/* AI Prediction */}
-                    {selectedEquipment.mlPrediction && (
-                      <div className="border-t pt-3">
-                        <h5 className="font-medium mb-2 flex items-center">
-                          <Brain className="h-4 w-4 text-purple-600 mr-1" />
-                          AI Prediction
-                        </h5>
-                        <div className="bg-purple-50 rounded p-2 space-y-1 text-sm">
-                          <div className="flex justify-between">
-                            <span>Risk Level:</span>
-                            <span className={`px-2 py-0.5 rounded text-xs ${
-                              selectedEquipment.mlPrediction.riskLevel === 'high' ? 'bg-red-100 text-red-800' :
-                              selectedEquipment.mlPrediction.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-800' :
-                              'bg-green-100 text-green-800'
-                            }`}>
-                              {selectedEquipment.mlPrediction.riskLevel.toUpperCase()}
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Failure Risk:</span>
-                            <span className="font-medium">{selectedEquipment.mlPrediction.failureProbability}%</span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span>Maintenance in:</span>
-                            <span className="font-medium">{selectedEquipment.mlPrediction.daysUntilMaintenance} days</span>
-                          </div>
-                          <div className="mt-2 p-2 bg-white rounded text-xs">
-                            <strong>Recommendation:</strong> {selectedEquipment.mlPrediction.recommendedAction}
-                          </div>
+                  </div>
+                </div>
+              ))}
+              
+              {/* Warning Issues */}
+              {warningIssues.map((issue, index) => (
+                <div key={`warning-${index}`} className={`mb-2 p-3 border rounded-lg ${issue.color}`}>
+                  <div className="flex items-start space-x-2">
+                    <span className="text-sm">{issue.icon}</span>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-medium text-sm">{issue.sensor}</span>
+                        <span className="text-xs font-bold px-2 py-1 bg-yellow-100 text-yellow-800 rounded">
+                          WARNING
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-xs mb-1">
+                        <div>
+                          <span className="text-gray-600">Current:</span>
+                          <span className="ml-1 font-bold text-yellow-600">{issue.current}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Threshold:</span>
+                          <span className="ml-1">{issue.threshold}</span>
                         </div>
                       </div>
-                    )}
-
-                    {/* Sensor Data */}
-                    {selectedEquipment.mlPrediction?.sensors && (
-                      <div className="border-t pt-3">
-                        <h5 className="font-medium mb-2">Latest Sensors</h5>
-                        <div className="grid grid-cols-2 gap-2 text-xs">
-                          <div className="bg-gray-50 p-2 rounded">
-                            <span className="text-gray-600">Temp:</span>
-                            <span className="ml-1 font-medium">{selectedEquipment.mlPrediction.sensors.temperature}°F</span>
-                          </div>
-                          <div className="bg-gray-50 p-2 rounded">
-                            <span className="text-gray-600">Vibration:</span>
-                            <span className="ml-1 font-medium">{selectedEquipment.mlPrediction.sensors.vibration}g</span>
-                          </div>
-                          <div className="bg-gray-50 p-2 rounded">
-                            <span className="text-gray-600">Pressure:</span>
-                            <span className="ml-1 font-medium">{selectedEquipment.mlPrediction.sensors.pressure} PSI</span>
-                          </div>
-                          <div className="bg-gray-50 p-2 rounded">
-                            <span className="text-gray-600">Current:</span>
-                            <span className="ml-1 font-medium">{selectedEquipment.mlPrediction.sensors.current}A</span>
-                          </div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action Buttons */}
-                    <div className="border-t pt-3 flex space-x-2">
-                      <button className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
-                        View Details
-                      </button>
-                      <button className="flex-1 px-3 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700">
-                        Schedule Service
-                      </button>
+                      <p className="text-xs">{issue.status}</p>
+                      <p className="text-xs text-gray-700 bg-white/70 p-1 rounded mt-1">
+                        {issue.impact}
+                      </p>
                     </div>
+                  </div>
+                </div>
+              ))}
+              
+              {/* Info Issues */}
+              {infoIssues.map((issue, index) => (
+                <div key={`info-${index}`} className={`mb-2 p-2 border rounded-lg ${issue.color}`}>
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center space-x-2">
+                      <span>{issue.icon}</span>
+                      <span className="font-medium">{issue.sensor}:</span>
+                      <span>{issue.current}</span>
+                    </div>
+                    <span className="text-blue-600 font-medium">INFO</span>
+                  </div>
+                  <p className="text-xs text-gray-700 mt-1 ml-6">{issue.impact}</p>
+                </div>
+              ))}
+              
+              {/* No Issues */}
+              {rootCauses.length === 0 && (
+                <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center space-x-2">
+                    <CheckCircle className="h-4 w-4 text-green-600" />
+                    <span className="text-sm font-medium text-green-800">All Parameters Normal</span>
                   </div>
                 </div>
               )}
             </div>
+          )}
 
-            {/* Map Legend */}
-            <div className="mt-4 flex items-center justify-between">
-              <div className="flex items-center space-x-6 text-sm">
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-green-500 rounded-full"></div>
-                  <span>Operational</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
-                  <span>Maintenance</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                  <span>Critical/High Risk</span>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-3 h-3 bg-gray-500 rounded-full"></div>
-                  <span>Idle</span>
-                </div>
-                {mlModel && (
-                  <div className="flex items-center space-x-2">
-                    <div className="w-3 h-3 border-2 border-red-500 rounded-full animate-pulse"></div>
-                    <span>AI High Risk</span>
-                  </div>
-                )}
+          {/* Equipment Details */}
+          <div className="border-t pt-3">
+            <h5 className="font-medium mb-2">Equipment Details</h5>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <span className="text-gray-600">ID:</span>
+                <span className="ml-2 font-medium">{equipment.id}</span>
               </div>
-              <div className="text-sm text-gray-600">
-                Click equipment for details • {mapView === 'detailed' ? 'Detailed' : 'Overview'} view
+              <div>
+                <span className="text-gray-600">Type:</span>
+                <span className="ml-2">{equipment.equipmentType}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Area:</span>
+                <span className="ml-2">{equipment.area}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Status:</span>
+                <span className={`ml-2 px-2 py-0.5 rounded text-xs font-medium ${
+                  equipment.status === 'critical' ? 'bg-red-100 text-red-800' :
+                  equipment.status === 'maintenance' ? 'bg-yellow-100 text-yellow-800' :
+                  equipment.status === 'idle' ? 'bg-gray-100 text-gray-800' :
+                  'bg-green-100 text-green-800'
+                }`}>
+                  {equipment.status.toUpperCase()}
+                </span>
               </div>
             </div>
           </div>
-        )}
 
-        {/* Grid View */}
-        {mapView === 'grid' && (
-          <div className="bg-white rounded-lg shadow p-6">
-            <h3 className="text-lg font-semibold mb-4">Equipment Grid View - {selectedSite}</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {/* AI Prediction */}
+          {equipment.mlPrediction && (
+            <div className="border-t pt-3">
+              <h5 className="font-medium mb-2 flex items-center">
+                <Brain className="h-4 w-4 text-purple-600 mr-1" />
+                AI Prediction
+              </h5>
+              <div className="bg-purple-50 rounded p-3">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="text-sm">Risk Level:</span>
+                  <span className={`px-2 py-1 rounded text-xs font-bold ${
+                    equipment.mlPrediction.riskLevel === 'high' ? 'bg-red-100 text-red-800' :
+                    equipment.mlPrediction.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-green-100 text-green-800'
+                  }`}>
+                    {equipment.mlPrediction.riskLevel.toUpperCase()}
+                  </span>
+                </div>
+                <div className="text-sm mb-2">
+                  <strong>AI Recommendation:</strong> {equipment.mlPrediction.recommendedAction}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Action Buttons */}
+          <div className="border-t pt-3 flex space-x-2">
+            <button className="flex-1 px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700">
+              View Details
+            </button>
+            {(criticalIssues.length > 0 || warningIssues.length > 0) ? (
+              <button className="flex-1 px-3 py-2 bg-red-600 text-white text-sm rounded hover:bg-red-700">
+                Emergency Service
+              </button>
+            ) : (
+              <button className="flex-1 px-3 py-2 bg-green-600 text-white text-sm rounded hover:bg-green-700">
+                Schedule Service
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Get maintenance statistics
+  const getMaintenanceStats = () => {
+    const total = siteEquipment.length;
+    const needsUrgentMaintenance = siteEquipment.filter(e => 
+      e.mlPrediction?.riskLevel === 'high' || e.status === 'critical'
+    ).length;
+    const needsSoonMaintenance = siteEquipment.filter(e => 
+      e.mlPrediction?.riskLevel === 'medium' || e.status === 'maintenance'
+    ).length;
+    const operational = siteEquipment.filter(e => 
+      e.status === 'operational' && (!e.mlPrediction || e.mlPrediction.riskLevel === 'low')
+    ).length;
+    const idle = siteEquipment.filter(e => e.status === 'idle').length;
+    
+    return { total, needsUrgentMaintenance, needsSoonMaintenance, operational, idle };
+  };
+
+  const stats = getMaintenanceStats();
+
+  return (
+    <div className="space-y-6">
+      {/* Header Section */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-xl font-semibold flex items-center space-x-2">
+              <Activity className="h-6 w-6 text-blue-600" />
+              <span>Equipment Fleet Management</span>
+            </h2>
+            <p className="text-gray-600">Real-time equipment monitoring and AI maintenance predictions</p>
+          </div>
+          <div className="flex items-center space-x-4">
+            <select 
+              value={selectedSite}
+              onChange={(e) => setSelectedSite(e.target.value)}
+              className="border rounded px-3 py-2"
+            >
+              {dashboardData.jobSites.map((site, index) => (
+                <option key={index} value={site.name}>{site.name}</option>
+              ))}
+            </select>
+            <div className="flex bg-gray-100 rounded-lg p-1">
+              <button
+                onClick={() => setMapView('overview')}
+                className={`px-3 py-1 rounded text-sm ${mapView === 'overview' ? 'bg-white shadow' : ''}`}
+              >
+                Overview
+              </button>
+              <button
+                onClick={() => setMapView('detailed')}
+                className={`px-3 py-1 rounded text-sm ${mapView === 'detailed' ? 'bg-white shadow' : ''}`}
+              >
+                Detailed
+              </button>
+              <button
+                onClick={() => setMapView('grid')}
+                className={`px-3 py-1 rounded text-sm ${mapView === 'grid' ? 'bg-white shadow' : ''}`}
+              >
+                Grid View
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Status Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-4">
+          <div className="text-center p-3 bg-blue-50 rounded-lg">
+            <p className="text-2xl font-bold text-blue-600">{stats.total}</p>
+            <p className="text-sm text-gray-600">Total Units</p>
+          </div>
+          <div className="text-center p-3 bg-green-50 rounded-lg">
+            <p className="text-2xl font-bold text-green-600">{stats.operational}</p>
+            <p className="text-sm text-gray-600">Operational</p>
+          </div>
+          <div className="text-center p-3 bg-yellow-50 rounded-lg">
+            <p className="text-2xl font-bold text-yellow-600">{stats.needsSoonMaintenance}</p>
+            <p className="text-sm text-gray-600">Maintenance Soon</p>
+          </div>
+          <div className="text-center p-3 bg-red-50 rounded-lg">
+            <p className="text-2xl font-bold text-red-600">{stats.needsUrgentMaintenance}</p>
+            <p className="text-sm text-gray-600">Urgent Maintenance</p>
+          </div>
+          <div className="text-center p-3 bg-gray-50 rounded-lg">
+            <p className="text-2xl font-bold text-gray-600">{stats.idle}</p>
+            <p className="text-sm text-gray-600">Idle</p>
+          </div>
+          <div className="text-center p-3 bg-purple-50 rounded-lg">
+            <p className="text-2xl font-bold text-purple-600">
+              {mlPredictions.filter(p => p.riskLevel === 'high').length}
+            </p>
+            <p className="text-sm text-gray-600">AI High Risk</p>
+          </div>
+        </div>
+
+        {/* Data Source Indicator */}
+        <div className="p-3 rounded-lg mb-4 bg-blue-50">
+          <p className="text-sm text-blue-800">
+            <strong>📊 Data Source:</strong> Equipment data from Snowflake.
+            {connectionStatus === 'connected' ? 
+              ` Showing ${siteEquipment.length} units with real-time status.` :
+              ' Using demo data.'
+            }
+            {mlModel && mlPredictions.length > 0 && (
+              <span className="ml-2">🧠 AI predictions active.</span>
+            )}
+          </p>
+        </div>
+      </div>
+
+      {/* Equipment Map */}
+      {mapView !== 'grid' && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-lg font-semibold">Live Job Site Map - {selectedSite}</h3>
+              <p className="text-sm text-gray-600">
+                Click any equipment for detailed root cause analysis
+              </p>
+            </div>
+            <div className="flex items-center space-x-3">
+              {loadingEquipment && <Loader2 className="h-4 w-4 animate-spin text-blue-600" />}
+              <span className="text-sm text-gray-600">{siteEquipment.length} units</span>
+            </div>
+          </div>
+
+          <div className="relative bg-gray-100 rounded-lg" style={{ height: mapView === 'detailed' ? '600px' : '450px' }}>
+            <svg width="100%" height="100%" viewBox="0 0 100 100" className="w-full h-full">
+              {/* Background and areas */}
+              <rect x="5" y="5" width="25" height="40" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
+              <rect x="35" y="5" width="25" height="40" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
+              <rect x="65" y="5" width="30" height="40" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
+              <rect x="5" y="50" width="25" height="45" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
+              <rect x="35" y="50" width="25" height="45" fill="#F3F4F6" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
+              <rect x="65" y="50" width="30" height="45" fill="#F9FAFB" stroke="#D1D5DB" strokeWidth="0.3" rx="2" />
+              
+              {/* Area labels */}
+              <text x="17.5" y="15" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Excavation</text>
+              <text x="47.5" y="15" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Staging</text>
+              <text x="80" y="15" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Storage</text>
+              <text x="17.5" y="65" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Concrete</text>
+              <text x="47.5" y="65" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Assembly</text>
+              <text x="80" y="65" textAnchor="middle" fontSize="2.5" fill="#6B7280" fontWeight="bold">Access</text>
+
+              {/* Equipment markers */}
               {siteEquipment.map((item) => (
-                <div key={item.id} className="border rounded-lg p-4 hover:shadow-md transition-shadow">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center space-x-2">
-                      <span className="text-2xl">{getEquipmentIcon(item.equipmentType)}</span>
-                      <div>
-                        <h4 className="font-medium">{item.name}</h4>
-                        <p className="text-sm text-gray-600">{item.id}</p>
-                      </div>
+                <g key={item.id}>
+                  <circle
+                    cx={item.x}
+                    cy={item.y}
+                    r={mapView === 'detailed' ? "2.5" : "2"}
+                    fill={getStatusColor(item)}
+                    stroke="#FFFFFF"
+                    strokeWidth="0.5"
+                    className="cursor-pointer transition-all duration-200"
+                    onClick={() => setSelectedEquipment(item)}
+                  />
+                  
+                  {/* AI prediction indicators */}
+                  {item.mlPrediction?.riskLevel === 'high' && (
+                    <circle
+                      cx={item.x}
+                      cy={item.y}
+                      r="3.5"
+                      fill="none"
+                      stroke="#EF4444"
+                      strokeWidth="0.4"
+                      className="animate-pulse"
+                    />
+                  )}
+                  
+                  <text 
+                    x={item.x} 
+                    y={item.y + 1} 
+                    textAnchor="middle" 
+                    fontSize={mapView === 'detailed' ? "1.8" : "1.4"} 
+                    fill="#FFFFFF"
+                    fontWeight="bold"
+                    className="pointer-events-none"
+                  >
+                    {getEquipmentIcon(item.equipmentType)}
+                  </text>
+                  
+                  {mapView === 'detailed' && (
+                    <text 
+                      x={item.x} 
+                      y={item.y - 4} 
+                      textAnchor="middle" 
+                      fontSize="1" 
+                      fill="#374151"
+                      className="pointer-events-none"
+                    >
+                      {item.id}
+                    </text>
+                  )}
+                </g>
+              ))}
+            </svg>
+
+            {/* Enhanced Equipment Popup */}
+            {selectedEquipment && (
+              <EnhancedEquipmentPopup 
+                equipment={selectedEquipment}
+                onClose={() => setSelectedEquipment(null)}
+              />
+            )}
+          </div>
+
+          {/* Map Legend */}
+          <div className="mt-4 flex items-center justify-between">
+            <div className="flex items-center space-x-6 text-sm">
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-green-500 rounded-full"></div>
+                <span>Operational</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-yellow-500 rounded-full"></div>
+                <span>Maintenance Soon</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                <span>Critical/Urgent</span>
+              </div>
+              <div className="flex items-center space-x-2">
+                <div className="w-3 h-3 bg-gray-500 rounded-full"></div>
+                <span>Idle</span>
+              </div>
+              {mlModel && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-3 h-3 border-2 border-red-500 rounded-full animate-pulse"></div>
+                  <span>AI High Risk</span>
+                </div>
+              )}
+            </div>
+            <div className="text-sm text-gray-600">
+              Click equipment for root cause analysis
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Grid View */}
+      {mapView === 'grid' && (
+        <div className="bg-white rounded-lg shadow p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Equipment Grid - {selectedSite}</h3>
+            <p className="text-sm text-gray-600">Sorted by maintenance priority</p>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {siteEquipment
+              .sort((a, b) => {
+                const priorityOrder = { urgent: 0, soon: 1, scheduled: 2, none: 3 };
+                return priorityOrder[a.maintenancePriority] - priorityOrder[b.maintenancePriority];
+              })
+              .map((item) => (
+              <div 
+                key={item.id} 
+                className={`border rounded-lg p-4 hover:shadow-md transition-shadow cursor-pointer ${
+                  item.maintenancePriority === 'urgent' ? 'border-red-300 bg-red-50' :
+                  item.maintenancePriority === 'soon' ? 'border-yellow-300 bg-yellow-50' :
+                  'border-gray-200'
+                }`}
+                onClick={() => setSelectedEquipment(item)}
+              >
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center space-x-2">
+                    <span className="text-2xl">
+                      {item.equipmentType === 'Generators' ? '⚡' :
+                       item.equipmentType === 'Water Pumps' ? '💧' :
+                       item.equipmentType === 'Compactors' ? '🚧' :
+                       item.equipmentType === 'Mixers' ? '🌀' : '🔧'}
+                    </span>
+                    <div>
+                      <h4 className="font-medium">{item.name}</h4>
+                      <p className="text-sm text-gray-600">{item.id}</p>
                     </div>
+                  </div>
+                  <div className="flex items-center space-x-1">
                     <div className={`w-3 h-3 rounded-full ${
-                      item.status === 'critical' || item.mlPrediction?.riskLevel === 'high' ? 'bg-red-500' :
-                      item.status === 'maintenance' || item.mlPrediction?.riskLevel === 'medium' ? 'bg-yellow-500' :
-                      item.status === 'idle' ? 'bg-gray-500' : 'bg-green-500'
+                      item.maintenancePriority === 'urgent' ? 'bg-red-500' :
+                      item.maintenancePriority === 'soon' ? 'bg-yellow-500' :
+                      item.maintenancePriority === 'scheduled' ? 'bg-blue-500' : 'bg-green-500'
                     }`}></div>
+                    {item.mlPrediction && <Brain className="h-3 w-3 text-purple-600" />}
+                  </div>
+                </div>
+                
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Status:</span>
+                    <span className={
+                      item.status === 'critical' ? 'text-red-600 font-medium' :
+                      item.status === 'maintenance' ? 'text-yellow-600 font-medium' :
+                      item.status === 'idle' ? 'text-gray-600' : 'text-green-600'
+                    }>
+                      {item.status.toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-600">Uptime:</span>
+                    <span className={item.uptime < 85 ? 'text-red-600 font-medium' : ''}>
+                      {item.uptime.toFixed(1)}%
+                    </span>
                   </div>
                   
-                  <div className="space-y-2 text-sm">
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Type:</span>
-                      <span>{item.equipmentType}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Area:</span>
-                      <span>{item.area}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Uptime:</span>
-                      <span>{item.uptime.toFixed(1)}%</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-gray-600">Hours:</span>
-                      <span>{item.operatingHours.toFixed(0)}h</span>
-                    </div>
-                  </div>
-
                   {item.mlPrediction && (
-                    <div className="mt-3 p-2 bg-purple-50 rounded">
+                    <div className="mt-2 p-2 bg-purple-50 rounded">
                       <div className="flex items-center justify-between text-sm">
                         <span className="flex items-center">
                           <Brain className="h-3 w-3 text-purple-600 mr-1" />
                           AI Risk:
                         </span>
-                        <span className={`px-2 py-0.5 rounded text-xs ${
+                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
                           item.mlPrediction.riskLevel === 'high' ? 'bg-red-100 text-red-800' :
                           item.mlPrediction.riskLevel === 'medium' ? 'bg-yellow-100 text-yellow-800' :
                           'bg-green-100 text-green-800'
                         }`}>
-                          {item.mlPrediction.riskLevel}
+                          {item.mlPrediction.riskLevel.toUpperCase()}
                         </span>
                       </div>
+                      {item.mlPrediction.riskLevel !== 'low' && (
+                        <p className="text-xs text-purple-700 mt-1">
+                          {item.mlPrediction.recommendedAction}
+                        </p>
+                      )}
                     </div>
                   )}
-
-                  <div className="mt-3 flex space-x-2">
-                    <button 
-                      onClick={() => setSelectedEquipment(item)}
-                      className="flex-1 px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
-                    >
-                      Details
-                    </button>
-                    <button className="flex-1 px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700">
-                      Service
-                    </button>
-                  </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            ))}
           </div>
-        )}
-      </div>
-    );
-  };
+          
+          {/* Enhanced Equipment Popup for Grid View */}
+          {selectedEquipment && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+              <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full m-4 max-h-[90vh] overflow-hidden">
+                <EnhancedEquipmentPopup 
+                  equipment={selectedEquipment}
+                  onClose={() => setSelectedEquipment(null)}
+                />
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
 
 const AlertsModule = () => (
     <div className="bg-white rounded-lg shadow p-6">
