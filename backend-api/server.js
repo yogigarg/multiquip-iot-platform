@@ -1,4 +1,4 @@
-// backend-api/server.js - Updated with Private Key Authentication
+// backend-api/server.js - Updated with Private Key Authentication and Dynamic Database References
 const express = require('express');
 const cors = require('cors');
 const snowflake = require('snowflake-sdk');
@@ -16,6 +16,7 @@ app.use(express.json());
 
 // Snowflake connection configuration
 let snowflakeConnection = null;
+let currentConfig = null; // Store current connection config for database/schema references
 
 // Mock data for fallback (when Snowflake is not available)
 const mockData = {
@@ -101,18 +102,25 @@ const mockData = {
 const cleanSnowflakeAccount = (account) => {
   if (!account) return account;
   
-  // Remove duplicate .snowflakecomputing.com suffixes
   let cleanAccount = account.toLowerCase().trim();
   
-  // If it already has .snowflakecomputing.com, don't add it again
-  if (cleanAccount.endsWith('.snowflakecomputing.com')) {
-    // Remove any double .snowflakecomputing.com
-    cleanAccount = cleanAccount.replace(/\.snowflakecomputing\.com\.snowflakecomputing\.com$/, '.snowflakecomputing.com');
-    // Extract just the account identifier part
-    cleanAccount = cleanAccount.replace(/\.snowflakecomputing\.com$/, '');
+  // Handle JDBC URL format: jdbc:snowflake://account.region.snowflakecomputing.com
+  if (cleanAccount.startsWith('jdbc:snowflake://')) {
+    cleanAccount = cleanAccount.replace('jdbc:snowflake://', '');
+    console.log(`🔧 Removed JDBC prefix: ${cleanAccount}`);
   }
   
-  console.log(`🔧 Cleaned account: ${account} → ${cleanAccount}`);
+  // Handle full URL format: account.region.snowflakecomputing.com
+  if (cleanAccount.includes('.snowflakecomputing.com')) {
+    // Extract account.region part
+    cleanAccount = cleanAccount.replace(/\.snowflakecomputing\.com.*$/, '');
+    console.log(`🔧 Extracted account from URL: ${cleanAccount}`);
+  }
+  
+  // Remove any trailing slashes or whitespace
+  cleanAccount = cleanAccount.replace(/\/+$/, '').trim();
+  
+  console.log(`🔧 Final cleaned account: ${account} → ${cleanAccount}`);
   return cleanAccount;
 };
 
@@ -138,31 +146,77 @@ const loadPrivateKey = (privateKeyPath, passphrase) => {
       console.log('🔑 Private key loaded from file');
     }
     
+    console.log('🔍 Private key preview:', privateKeyData.substring(0, 100) + '...');
+    console.log('🔍 Private key ends with:', privateKeyData.substring(privateKeyData.length - 100));
+    
     // Process the private key
-    let privateKey;
+    let processedPrivateKey;
     if (passphrase) {
-      console.log('🔐 Private key has passphrase - decrypting...');
-      privateKey = crypto.createPrivateKey({
-        key: privateKeyData,
-        passphrase: passphrase,
-        format: 'pem'
-      });
+      console.log('🔐 Private key has passphrase - processing...');
+      try {
+        // Create private key object to validate it
+        const privateKeyObject = crypto.createPrivateKey({
+          key: privateKeyData,
+          passphrase: passphrase,
+          format: 'pem'
+        });
+        
+        // Export as PKCS8 PEM format (what Snowflake expects)
+        processedPrivateKey = privateKeyObject.export({
+          format: 'pem',
+          type: 'pkcs8'
+        });
+        
+        // Ensure it's a string
+        if (Buffer.isBuffer(processedPrivateKey)) {
+          processedPrivateKey = processedPrivateKey.toString('utf8');
+        }
+        
+      } catch (passphraseError) {
+        console.error('❌ Error processing private key with passphrase:', passphraseError.message);
+        // Try without passphrase in case the key isn't actually encrypted
+        console.log('🔄 Attempting without passphrase...');
+        const privateKeyObject = crypto.createPrivateKey({
+          key: privateKeyData,
+          format: 'pem'
+        });
+        
+        processedPrivateKey = privateKeyObject.export({
+          format: 'pem',
+          type: 'pkcs8'
+        });
+        
+        if (Buffer.isBuffer(processedPrivateKey)) {
+          processedPrivateKey = processedPrivateKey.toString('utf8');
+        }
+      }
     } else {
       console.log('🔓 Private key has no passphrase');
-      privateKey = crypto.createPrivateKey({
+      // Create private key object to validate and convert if needed
+      const privateKeyObject = crypto.createPrivateKey({
         key: privateKeyData,
         format: 'pem'
       });
+      
+      // Export as PKCS8 PEM format (what Snowflake expects)
+      processedPrivateKey = privateKeyObject.export({
+        format: 'pem',
+        type: 'pkcs8'
+      });
+      
+      // Ensure it's a string
+      if (Buffer.isBuffer(processedPrivateKey)) {
+        processedPrivateKey = processedPrivateKey.toString('utf8');
+      }
     }
     
-    // Convert to DER format for Snowflake
-    const privateKeyDER = privateKey.export({
-      format: 'der',
-      type: 'pkcs8'
-    });
+    console.log('✅ Private key processed successfully as PEM PKCS8 format');
+    console.log(`🔍 Private key type: ${typeof processedPrivateKey}`);
+    console.log(`🔍 Private key length: ${processedPrivateKey.length}`);
+    console.log(`🔍 Key starts with: ${processedPrivateKey.substring(0, 50)}...`);
+    console.log(`🔍 Key format check: ${processedPrivateKey.includes('-----BEGIN PRIVATE KEY-----') ? 'Valid PKCS8 PEM' : 'Invalid PEM format'}`);
     
-    console.log('✅ Private key processed successfully');
-    return privateKeyDER;
+    return processedPrivateKey;
     
   } catch (error) {
     console.error('❌ Error loading private key:', error.message);
@@ -184,25 +238,39 @@ const connectToSnowflake = (config) => {
       console.log(`   Private Key: ${config.privateKey ? 'Provided' : 'Missing'}`);
       console.log(`   Passphrase: ${config.passphrase ? 'Provided' : 'Not provided'}`);
       
-      // Load and process the private key
-      const privateKeyBuffer = loadPrivateKey(config.privateKey, config.passphrase);
+      // Load and process the private key - returns PEM string
+      const privateKeyPEM = loadPrivateKey(config.privateKey, config.passphrase);
       
-      const connectionConfig = {
-        account: cleanedAccount,
-        username: config.username,
-        privateKey: privateKeyBuffer,
+      // For account boomi.us-east-1, try different formats
+      const baseAccount = cleanedAccount;
+      const accountFormats = [
+        baseAccount,                    // boomi.us-east-1
+        baseAccount.split('.')[0],      // boomi (just the org name)
+        baseAccount.toUpperCase(),      // BOOMI.US-EAST-1
+        baseAccount.split('.')[0].toUpperCase()  // BOOMI
+      ];
+      
+      console.log('🔄 Will try these account formats:', accountFormats);
+      
+      // Try the first format initially
+      let connectionConfig = {
+        account: accountFormats[0], // Start with full account identifier
+        username: config.username.toUpperCase(), // Ensure username is uppercase
+        privateKey: privateKeyPEM,
         warehouse: config.warehouse,
         database: config.database,
         schema: config.schema,
-        // IMPORTANT: Snowflake SDK bug workaround - provide empty password when using private key
-        password: '', // This prevents the "password must be specified" error
-        // Add additional connection options for better reliability
-        connectTimeout: 60000, // 60 seconds
-        networkTimeout: 60000,
-        queryTimeout: 60000,
-        // Handle SSL issues
+        authenticator: 'SNOWFLAKE_JWT', // Explicitly set JWT authentication
+        // Connection timeouts
+        connectTimeout: 30000,
+        networkTimeout: 30000,
+        queryTimeout: 30000,
+        // SSL settings
         insecureConnect: false,
-        ocspFailOpen: true
+        ocspFailOpen: true,
+        // Additional options that might help
+        validateDefaultParameters: true,
+        clientSessionKeepAlive: true
       };
       
       // Log the connection configuration (without sensitive data)
@@ -212,9 +280,11 @@ const connectToSnowflake = (config) => {
         warehouse: connectionConfig.warehouse,
         database: connectionConfig.database,
         schema: connectionConfig.schema,
+        authenticator: connectionConfig.authenticator,
         hasPrivateKey: !!connectionConfig.privateKey,
-        hasPassword: !!connectionConfig.password,
-        passwordLength: connectionConfig.password.length
+        privateKeyType: typeof connectionConfig.privateKey,
+        privateKeyFormat: connectionConfig.privateKey && connectionConfig.privateKey.includes('-----BEGIN PRIVATE KEY-----') ? 'PKCS8 PEM' : 'Unknown',
+        privateKeyLength: connectionConfig.privateKey ? connectionConfig.privateKey.length : 0
       });
 
       const connection = snowflake.createConnection(connectionConfig);
@@ -225,29 +295,113 @@ const connectToSnowflake = (config) => {
           console.error('📝 Error details:', {
             code: err.code,
             sqlState: err.sqlState,
-            message: err.message
+            message: err.message,
+            accountUsed: connectionConfig.account
           });
           
-          // Additional troubleshooting for private key auth
-          if (err.code === 404005) {
-            console.error('🔧 Troubleshooting: This might be a Snowflake SDK configuration issue');
-            console.error('   - Ensure your Snowflake user has the public key configured');
-            console.error('   - Verify the account identifier is correct');
-            console.error('   - Check if the private key format is supported');
+          // If account format error (404045), try alternative formats
+          if (err.code === 404045 && accountFormats.length > 1) {
+            console.log('🔄 Account format error, trying alternative formats...');
+            tryAlternativeAccountFormats(accountFormats.slice(1), config, privateKeyPEM, resolve, reject);
+            return;
+          }
+          
+          // Specific troubleshooting based on error codes
+          if (err.code === 401002) {
+            console.error('🔧 Troubleshooting 401002 Authentication Error:');
+            console.error('   1. Verify your public key is correctly configured in Snowflake user account');
+            console.error('   2. Ensure the private key matches the uploaded public key');
+            console.error('   3. Check if the account identifier is correct');
+            console.error('   4. Verify the username case (should be uppercase)');
+            console.error('   5. Ensure the private key is in PKCS8 format');
+            console.error('');
+            console.error('🔑 To check your public key in Snowflake, run:');
+            console.error(`   DESCRIBE USER ${config.username.toUpperCase()};`);
+            console.error('');
+            console.error('🔑 To set/update your public key, run:');
+            console.error(`   ALTER USER ${config.username.toUpperCase()} SET RSA_PUBLIC_KEY='<your_public_key>';`);
+          } else if (err.code === 404045) {
+            console.error('🔧 Troubleshooting 404045 Invalid Account Error:');
+            console.error('   1. Your account identifier should be in format: orgname-accountname');
+            console.error('   2. For boomi.us-east-1.snowflakecomputing.com, try: boomi.us-east-1');
+            console.error('   3. Or try just the org name: boomi');
+            console.error('   4. Check your Snowflake URL in the web interface');
           }
           
           reject(err);
         } else {
           console.log('✅ Connected to Snowflake successfully with private key authentication');
+          console.log(`✅ Account format used: ${connectionConfig.account}`);
           snowflakeConnection = conn;
+          // Store current config for database/schema references
+          currentConfig = {
+            database: config.database,
+            schema: config.schema
+          };
           resolve(conn);
         }
       });
+      
+      // Helper function to try alternative account formats
+      function tryAlternativeAccountFormats(remainingFormats, config, privateKeyPEM, resolve, reject) {
+        if (remainingFormats.length === 0) {
+          reject(new Error('All account formats failed'));
+          return;
+        }
+        
+        const nextFormat = remainingFormats[0];
+        console.log(`🔄 Trying account format: ${nextFormat}`);
+        
+        const altConnectionConfig = {
+          account: nextFormat,
+          username: config.username.toUpperCase(),
+          privateKey: privateKeyPEM,
+          warehouse: config.warehouse,
+          database: config.database,
+          schema: config.schema,
+          authenticator: 'SNOWFLAKE_JWT',
+          connectTimeout: 30000,
+          networkTimeout: 30000,
+          queryTimeout: 30000,
+          insecureConnect: false,
+          ocspFailOpen: true,
+          validateDefaultParameters: true,
+          clientSessionKeepAlive: true
+        };
+        
+        const altConnection = snowflake.createConnection(altConnectionConfig);
+        
+        altConnection.connect((err, conn) => {
+          if (err) {
+            console.error(`❌ Account format ${nextFormat} failed:`, err.message);
+            // Try next format
+            tryAlternativeAccountFormats(remainingFormats.slice(1), config, privateKeyPEM, resolve, reject);
+          } else {
+            console.log(`✅ Connected to Snowflake successfully with account format: ${nextFormat}`);
+            snowflakeConnection = conn;
+            // Store current config for database/schema references
+            currentConfig = {
+              database: config.database,
+              schema: config.schema
+            };
+            resolve(conn);
+          }
+        });
+      }
     } catch (error) {
       console.error('❌ Error creating Snowflake connection:', error);
       reject(error);
     }
   });
+};
+
+// Helper function to get database schema prefix
+const getDbSchemaPrefix = () => {
+  if (currentConfig && currentConfig.database && currentConfig.schema) {
+    return `${currentConfig.database}.${currentConfig.schema}`;
+  }
+  // Fallback to default if no connection config available
+  return 'MULTIQUIP_DB.CONSTRUCTION';
 };
 
 // Helper function to execute Snowflake queries
@@ -282,6 +436,7 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString(),
     snowflake: snowflakeConnection ? 'connected' : 'disconnected',
     authentication: 'private_key',
+    currentDatabase: currentConfig ? `${currentConfig.database}.${currentConfig.schema}` : 'not_connected',
     endpoints: [
       'GET /api/health',
       'POST /api/snowflake/test-connection',
@@ -316,7 +471,7 @@ app.post('/api/snowflake/test-connection', async (req, res) => {
     await connectToSnowflake(config);
     
     // Test with a simple query
-    const testQuery = 'SELECT CURRENT_VERSION() AS VERSION, CURRENT_USER() AS USER, CURRENT_DATABASE() AS DATABASE';
+    const testQuery = 'SELECT CURRENT_VERSION() AS VERSION, CURRENT_USER() AS USER, CURRENT_DATABASE() AS DATABASE, CURRENT_SCHEMA() AS SCHEMA';
     const testResult = await executeSnowflakeQuery(testQuery);
     
     res.json({
@@ -326,7 +481,8 @@ app.post('/api/snowflake/test-connection', async (req, res) => {
       connectionInfo: {
         version: testResult[0]?.VERSION,
         user: testResult[0]?.USER,
-        database: testResult[0]?.DATABASE
+        database: testResult[0]?.DATABASE,
+        schema: testResult[0]?.SCHEMA
       }
     });
   } catch (error) {
@@ -365,6 +521,9 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
     
     if (snowflakeConnection) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        console.log(`🔍 Using database schema: ${dbSchema}`);
+        
         // Execute multiple queries to get dashboard data
         
         // 1. Get total equipment count and fleet uptime
@@ -372,7 +531,7 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
           SELECT 
             COUNT(*) AS TOTAL_EQUIPMENT,
             ROUND(AVG(UPTIME_PERCENTAGE), 1) AS FLEET_UPTIME
-          FROM MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT 
+          FROM ${dbSchema}.EQUIPMENT 
           WHERE STATUS IN ('OPERATIONAL', 'MAINTENANCE', 'CRITICAL', 'IDLE')
         `;
         const equipmentMetrics = await executeSnowflakeQuery(equipmentMetricsQuery);
@@ -381,7 +540,7 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
         const aiAccuracyQuery = `
           SELECT 
             ROUND(AVG(ACCURACY_PERCENTAGE), 1) AS AI_ACCURACY
-          FROM MULTIQUIP_DB.CONSTRUCTION.ML_MODEL_PERFORMANCE 
+          FROM ${dbSchema}.ML_MODEL_PERFORMANCE 
           WHERE MODEL_STATUS = 'ACTIVE'
         `;
         const aiAccuracy = await executeSnowflakeQuery(aiAccuracyQuery);
@@ -390,7 +549,7 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
         const costSavingsQuery = `
           SELECT 
             ROUND(SUM(POTENTIAL_SAVINGS) / 1000, 1) AS COST_SAVINGS_K
-          FROM MULTIQUIP_DB.CONSTRUCTION.PREDICTIVE_ANALYTICS 
+          FROM ${dbSchema}.PREDICTIVE_ANALYTICS 
           WHERE STATUS = 'ACTIVE' 
             AND CREATED_DATE >= DATEADD(YEAR, -1, CURRENT_DATE())
         `;
@@ -403,9 +562,9 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
             COUNT(e.EQUIPMENT_ID) AS EQUIPMENT_COUNT,
             COUNT(DISTINCT wa.AREA_ID) AS WORK_AREAS,
             js.PROJECT_MANAGER
-          FROM MULTIQUIP_DB.CONSTRUCTION.JOB_SITES js
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT e ON js.SITE_ID = e.SITE_ID
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.WORK_AREAS wa ON js.SITE_ID = wa.SITE_ID
+          FROM ${dbSchema}.JOB_SITES js
+          LEFT JOIN ${dbSchema}.EQUIPMENT e ON js.SITE_ID = e.SITE_ID
+          LEFT JOIN ${dbSchema}.WORK_AREAS wa ON js.SITE_ID = wa.SITE_ID
           GROUP BY js.SITE_ID, js.SITE_NAME, js.PROJECT_MANAGER
           ORDER BY EQUIPMENT_COUNT DESC
         `;
@@ -423,8 +582,8 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
               WHEN ec.CATEGORY_NAME = 'Mixers' THEN 'Electric'
               ELSE 'Mixed'
             END AS FUEL_TYPE
-          FROM MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_CATEGORIES ec
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT e ON ec.CATEGORY_ID = e.CATEGORY_ID
+          FROM ${dbSchema}.EQUIPMENT_CATEGORIES ec
+          LEFT JOIN ${dbSchema}.EQUIPMENT e ON ec.CATEGORY_ID = e.CATEGORY_ID
           GROUP BY ec.CATEGORY_ID, ec.CATEGORY_NAME
           ORDER BY EQUIPMENT_COUNT DESC
         `;
@@ -439,9 +598,9 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
             a.MESSAGE,
             js.SITE_NAME,
             a.CREATED_DATE
-          FROM MULTIQUIP_DB.CONSTRUCTION.ALERTS a
-          JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT e ON a.EQUIPMENT_ID = e.EQUIPMENT_ID
-          JOIN MULTIQUIP_DB.CONSTRUCTION.JOB_SITES js ON e.SITE_ID = js.SITE_ID
+          FROM ${dbSchema}.ALERTS a
+          JOIN ${dbSchema}.EQUIPMENT e ON a.EQUIPMENT_ID = e.EQUIPMENT_ID
+          JOIN ${dbSchema}.JOB_SITES js ON e.SITE_ID = js.SITE_ID
           WHERE a.STATUS = 'ACTIVE'
           ORDER BY a.CREATED_DATE DESC
           LIMIT 10
@@ -453,7 +612,7 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
           SELECT 
             STATUS,
             COUNT(*) AS COUNT
-          FROM MULTIQUIP_DB.CONSTRUCTION.WORK_ORDERS
+          FROM ${dbSchema}.WORK_ORDERS
           WHERE STATUS IN ('SCHEDULED', 'IN_PROGRESS', 'PARTS_ORDERED', 'COMPLETED', 'EMERGENCY', 'OVERDUE')
             AND CREATED_DATE >= DATEADD(MONTH, -3, CURRENT_DATE())
           GROUP BY STATUS
@@ -492,7 +651,8 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
             EMERGENCY: maintenance.EMERGENCY || 0,
             OVERDUE: maintenance.OVERDUE || 0
           },
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         };
         
         console.log('✅ Dashboard data loaded from Snowflake using private key authentication');
@@ -523,6 +683,8 @@ app.post('/api/snowflake/equipment-data', async (req, res) => {
     
     if (snowflakeConnection) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         const equipmentQuery = `
           SELECT 
             e.EQUIPMENT_ID,
@@ -537,9 +699,9 @@ app.post('/api/snowflake/equipment-data', async (req, res) => {
             e.MANUFACTURER,
             e.MODEL_NUMBER,
             e.INSTALL_DATE
-          FROM MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT e
-          JOIN MULTIQUIP_DB.CONSTRUCTION.JOB_SITES js ON e.SITE_ID = js.SITE_ID
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.WORK_AREAS wa ON e.AREA_ID = wa.AREA_ID
+          FROM ${dbSchema}.EQUIPMENT e
+          JOIN ${dbSchema}.JOB_SITES js ON e.SITE_ID = js.SITE_ID
+          LEFT JOIN ${dbSchema}.WORK_AREAS wa ON e.AREA_ID = wa.AREA_ID
           WHERE js.SITE_NAME = ?
           ORDER BY e.EQUIPMENT_TYPE, e.EQUIPMENT_ID
         `;
@@ -575,7 +737,8 @@ app.post('/api/snowflake/equipment-data', async (req, res) => {
             INSTALLATION_DATE: e.INSTALL_DATE
           })),
           siteName,
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         });
         
         console.log(`✅ Equipment data loaded for site: ${siteName} using private key auth`);
@@ -627,6 +790,8 @@ app.post('/api/snowflake/sensor-data', async (req, res) => {
     
     if (snowflakeConnection) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         const sensorQuery = `
           SELECT 
             em.EQUIPMENT_ID,
@@ -635,8 +800,8 @@ app.post('/api/snowflake/sensor-data', async (req, res) => {
             em.METRIC_VALUE,
             em.METRIC_UNIT,
             es.SENSOR_TYPE
-          FROM MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_METRICS em
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_SENSORS es ON em.SENSOR_ID = es.SENSOR_ID
+          FROM ${dbSchema}.EQUIPMENT_METRICS em
+          LEFT JOIN ${dbSchema}.EQUIPMENT_SENSORS es ON em.SENSOR_ID = es.SENSOR_ID
           WHERE em.EQUIPMENT_ID = ?
             AND em.RECORDED_TIMESTAMP >= DATEADD(DAY, -?, CURRENT_TIMESTAMP())
           ORDER BY em.RECORDED_TIMESTAMP DESC
@@ -672,7 +837,8 @@ app.post('/api/snowflake/sensor-data', async (req, res) => {
           sensorData: transformedData,
           equipmentId,
           days,
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         });
         
         console.log(`✅ Sensor data loaded for equipment: ${equipmentId} using private key auth`);
@@ -734,13 +900,15 @@ app.post('/api/ml/train-model', async (req, res) => {
     // If connected to Snowflake, get real ML metrics
     if (snowflakeConnection) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         const mlMetricsQuery = `
           SELECT 
             AVG(ACCURACY_PERCENTAGE) / 100 AS accuracy,
             AVG(PRECISION_RATE) / 100 AS precision,
             AVG(RECALL_RATE) / 100 AS recall,
             AVG(F1_SCORE) / 100 AS f1Score
-          FROM MULTIQUIP_DB.CONSTRUCTION.ML_MODEL_PERFORMANCE 
+          FROM ${dbSchema}.ML_MODEL_PERFORMANCE 
           WHERE MODEL_STATUS = 'ACTIVE'
         `;
         
@@ -765,7 +933,8 @@ app.post('/api/ml/train-model', async (req, res) => {
       message: 'Model training completed successfully',
       metrics: metrics,
       timestamp: new Date().toISOString(),
-      dataSource: snowflakeConnection ? 'snowflake_live_privatekey' : 'mock'
+      dataSource: snowflakeConnection ? 'snowflake_live_privatekey' : 'mock',
+      databaseUsed: snowflakeConnection ? getDbSchemaPrefix() : 'mock'
     });
   } catch (error) {
     console.error('❌ ML model training error:', error);
@@ -784,6 +953,8 @@ app.post('/api/ml/predictions', async (req, res) => {
     
     if (snowflakeConnection && equipmentIds.length > 0) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         // Get real predictions from Snowflake
         const predictionsQuery = `
           SELECT 
@@ -800,11 +971,11 @@ app.post('/api/ml/predictions', async (req, res) => {
             em2.METRIC_VALUE AS VIBRATION,
             em3.METRIC_VALUE AS PRESSURE,
             em4.METRIC_VALUE AS CURRENT_VALUE
-          FROM MULTIQUIP_DB.CONSTRUCTION.PREDICTIVE_ANALYTICS pa
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_METRICS em ON pa.EQUIPMENT_ID = em.EQUIPMENT_ID AND em.METRIC_TYPE = 'Temperature'
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_METRICS em2 ON pa.EQUIPMENT_ID = em2.EQUIPMENT_ID AND em2.METRIC_TYPE = 'Vibration'
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_METRICS em3 ON pa.EQUIPMENT_ID = em3.EQUIPMENT_ID AND em3.METRIC_TYPE = 'Pressure'
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_METRICS em4 ON pa.EQUIPMENT_ID = em4.EQUIPMENT_ID AND em4.METRIC_TYPE = 'Current'
+          FROM ${dbSchema}.PREDICTIVE_ANALYTICS pa
+          LEFT JOIN ${dbSchema}.EQUIPMENT_METRICS em ON pa.EQUIPMENT_ID = em.EQUIPMENT_ID AND em.METRIC_TYPE = 'Temperature'
+          LEFT JOIN ${dbSchema}.EQUIPMENT_METRICS em2 ON pa.EQUIPMENT_ID = em2.EQUIPMENT_ID AND em2.METRIC_TYPE = 'Vibration'
+          LEFT JOIN ${dbSchema}.EQUIPMENT_METRICS em3 ON pa.EQUIPMENT_ID = em3.EQUIPMENT_ID AND em3.METRIC_TYPE = 'Pressure'
+          LEFT JOIN ${dbSchema}.EQUIPMENT_METRICS em4 ON pa.EQUIPMENT_ID = em4.EQUIPMENT_ID AND em4.METRIC_TYPE = 'Current'
           WHERE pa.EQUIPMENT_ID IN (${equipmentIds.map(() => '?').join(', ')})
             AND pa.STATUS = 'ACTIVE'
           ORDER BY pa.CONFIDENCE_SCORE DESC
@@ -847,7 +1018,8 @@ app.post('/api/ml/predictions', async (req, res) => {
           success: true,
           predictions: transformedPredictions,
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         });
         
         console.log(`✅ Generated ${transformedPredictions.length} predictions from Snowflake using private key auth`);
@@ -908,9 +1080,11 @@ app.post('/api/snowflake/upload-sensor-data', async (req, res) => {
     
     if (snowflakeConnection && sensorReadings && sensorReadings.length > 0) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         // Insert sensor readings into Snowflake
         const insertQuery = `
-          INSERT INTO MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT_METRICS 
+          INSERT INTO ${dbSchema}.EQUIPMENT_METRICS 
           (METRIC_ID, EQUIPMENT_ID, SENSOR_ID, METRIC_TYPE, METRIC_VALUE, METRIC_UNIT, RECORDED_TIMESTAMP, DATE_RECORDED)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `;
@@ -947,7 +1121,8 @@ app.post('/api/snowflake/upload-sensor-data', async (req, res) => {
           message: 'Sensor data uploaded successfully to Snowflake',
           recordsUploaded: sensorReadings.length,
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         });
         
         console.log(`✅ Uploaded ${sensorReadings.length} sensor readings to Snowflake using private key auth`);
@@ -982,13 +1157,15 @@ app.post('/api/snowflake/maintenance-summary', async (req, res) => {
     
     if (snowflakeConnection) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         const maintenanceQuery = `
           SELECT 
             wo.STATUS,
             COUNT(*) as COUNT,
             SUM(wo.TOTAL_COST) as TOTAL_COST,
             AVG(wo.ACTUAL_HOURS) as AVG_HOURS
-          FROM MULTIQUIP_DB.CONSTRUCTION.WORK_ORDERS wo
+          FROM ${dbSchema}.WORK_ORDERS wo
           WHERE wo.CREATED_DATE >= DATEADD(MONTH, -6, CURRENT_DATE())
           GROUP BY wo.STATUS
           ORDER BY COUNT DESC
@@ -1001,7 +1178,7 @@ app.post('/api/snowflake/maintenance-summary', async (req, res) => {
           SELECT 
             SUM(POTENTIAL_SAVINGS) as TOTAL_SAVINGS,
             COUNT(*) as PREDICTIONS_COUNT
-          FROM MULTIQUIP_DB.CONSTRUCTION.PREDICTIVE_ANALYTICS 
+          FROM ${dbSchema}.PREDICTIVE_ANALYTICS 
           WHERE STATUS = 'ACTIVE' 
             AND CREATED_DATE >= DATEADD(MONTH, -12, CURRENT_DATE())
         `;
@@ -1013,7 +1190,8 @@ app.post('/api/snowflake/maintenance-summary', async (req, res) => {
           maintenanceData: maintenanceData,
           costSavings: costSavings[0],
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         });
         
         console.log('✅ Maintenance summary loaded from Snowflake using private key auth');
@@ -1053,6 +1231,8 @@ app.post('/api/snowflake/analytics-data', async (req, res) => {
     
     if (snowflakeConnection) {
       try {
+        const dbSchema = getDbSchemaPrefix();
+        
         // Equipment utilization analytics
         const utilizationQuery = `
           SELECT 
@@ -1061,7 +1241,7 @@ app.post('/api/snowflake/analytics-data', async (req, res) => {
             AVG(e.UPTIME_PERCENTAGE) as AVG_UPTIME,
             SUM(e.OPERATING_HOURS) as TOTAL_HOURS,
             AVG(e.OPERATING_HOURS) as AVG_HOURS
-          FROM MULTIQUIP_DB.CONSTRUCTION.EQUIPMENT e
+          FROM ${dbSchema}.EQUIPMENT e
           GROUP BY e.EQUIPMENT_TYPE
           ORDER BY AVG_UPTIME DESC
         `;
@@ -1076,7 +1256,7 @@ app.post('/api/snowflake/analytics-data', async (req, res) => {
             SUM(fc.FUEL_COST_USD) as TOTAL_COST,
             AVG(fc.FUEL_COST_USD / fc.FUEL_AMOUNT_GALLONS) as AVG_PRICE_PER_GALLON,
             COUNT(*) as REFUEL_COUNT
-          FROM MULTIQUIP_DB.CONSTRUCTION.FUEL_CONSUMPTION fc
+          FROM ${dbSchema}.FUEL_CONSUMPTION fc
           WHERE fc.REFUEL_DATE >= DATEADD(MONTH, -3, CURRENT_DATE())
           GROUP BY fc.FUEL_TYPE
           ORDER BY TOTAL_COST DESC
@@ -1092,8 +1272,8 @@ app.post('/api/snowflake/analytics-data', async (req, res) => {
             mp.ROI_PERCENTAGE,
             mp.LAST_TRAINED,
             COUNT(pa.PREDICTION_ID) as ACTIVE_PREDICTIONS
-          FROM MULTIQUIP_DB.CONSTRUCTION.ML_MODEL_PERFORMANCE mp
-          LEFT JOIN MULTIQUIP_DB.CONSTRUCTION.PREDICTIVE_ANALYTICS pa ON mp.MODEL_ID = pa.MODEL_ID AND pa.STATUS = 'ACTIVE'
+          FROM ${dbSchema}.ML_MODEL_PERFORMANCE mp
+          LEFT JOIN ${dbSchema}.PREDICTIVE_ANALYTICS pa ON mp.MODEL_ID = pa.MODEL_ID AND pa.STATUS = 'ACTIVE'
           WHERE mp.MODEL_STATUS = 'ACTIVE'
           GROUP BY mp.MODEL_ID, mp.MODEL_NAME, mp.ACCURACY_PERCENTAGE, mp.ROI_PERCENTAGE, mp.LAST_TRAINED
           ORDER BY mp.ACCURACY_PERCENTAGE DESC
@@ -1109,7 +1289,8 @@ app.post('/api/snowflake/analytics-data', async (req, res) => {
             mlPerformance: mlPerformance
           },
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live_privatekey'
+          dataSource: 'snowflake_live_privatekey',
+          databaseUsed: dbSchema
         });
         
         console.log('✅ Analytics data loaded from Snowflake using private key auth');
@@ -1202,6 +1383,7 @@ app.listen(PORT, () => {
   console.log(`   2. Generate RSA key pair for your Snowflake user`);
   console.log(`   3. Upload public key to Snowflake user account`);
   console.log(`   4. All dashboard metrics will be loaded from live Snowflake data`);
+  console.log(`   5. SQL queries will use your specified database and schema dynamically`);
 });
 
 // Graceful shutdown
