@@ -540,7 +540,7 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
         const aiAccuracyQuery = `
           SELECT 
             ROUND(AVG(ACCURACY_PERCENTAGE), 1) AS AI_ACCURACY
-          FROM ${dbSchema}.ML_MODEL_PERFORMANCE 
+          FROM ${dbSchema}.MODEL_PERFORMANCE 
           WHERE MODEL_STATUS = 'ACTIVE'
         `;
         const aiAccuracy = await executeSnowflakeQuery(aiAccuracyQuery);
