@@ -1,7 +1,10 @@
-// backend-api/server.js - Updated with dynamic Snowflake queries
+// backend-api/server.js - Updated with Private Key Authentication
 const express = require('express');
 const cors = require('cors');
 const snowflake = require('snowflake-sdk');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -113,25 +116,86 @@ const cleanSnowflakeAccount = (account) => {
   return cleanAccount;
 };
 
+// Helper function to load and process private key
+const loadPrivateKey = (privateKeyPath, passphrase) => {
+  try {
+    console.log('🔑 Loading private key from:', privateKeyPath);
+    
+    let privateKeyData;
+    
+    // Check if privateKeyPath is a file path or the key content itself
+    if (privateKeyPath.includes('-----BEGIN') && privateKeyPath.includes('-----END')) {
+      // It's the actual key content
+      privateKeyData = privateKeyPath;
+      console.log('🔑 Using private key from environment variable content');
+    } else {
+      // It's a file path
+      const fullPath = path.resolve(privateKeyPath);
+      if (!fs.existsSync(fullPath)) {
+        throw new Error(`Private key file not found: ${fullPath}`);
+      }
+      privateKeyData = fs.readFileSync(fullPath, 'utf8');
+      console.log('🔑 Private key loaded from file');
+    }
+    
+    // Process the private key
+    let privateKey;
+    if (passphrase) {
+      console.log('🔐 Private key has passphrase - decrypting...');
+      privateKey = crypto.createPrivateKey({
+        key: privateKeyData,
+        passphrase: passphrase,
+        format: 'pem'
+      });
+    } else {
+      console.log('🔓 Private key has no passphrase');
+      privateKey = crypto.createPrivateKey({
+        key: privateKeyData,
+        format: 'pem'
+      });
+    }
+    
+    // Convert to DER format for Snowflake
+    const privateKeyDER = privateKey.export({
+      format: 'der',
+      type: 'pkcs8'
+    });
+    
+    console.log('✅ Private key processed successfully');
+    return privateKeyDER;
+    
+  } catch (error) {
+    console.error('❌ Error loading private key:', error.message);
+    throw new Error(`Failed to load private key: ${error.message}`);
+  }
+};
+
 const connectToSnowflake = (config) => {
   return new Promise((resolve, reject) => {
     try {
       const cleanedAccount = cleanSnowflakeAccount(config.account);
       
-      console.log('🔗 Connecting to Snowflake with config:');
+      console.log('🔗 Connecting to Snowflake with private key authentication:');
       console.log(`   Account: ${cleanedAccount}`);
       console.log(`   Username: ${config.username}`);
       console.log(`   Warehouse: ${config.warehouse}`);
       console.log(`   Database: ${config.database}`);
       console.log(`   Schema: ${config.schema}`);
+      console.log(`   Private Key: ${config.privateKey ? 'Provided' : 'Missing'}`);
+      console.log(`   Passphrase: ${config.passphrase ? 'Provided' : 'Not provided'}`);
       
-      const connection = snowflake.createConnection({
+      // Load and process the private key
+      const privateKeyBuffer = loadPrivateKey(config.privateKey, config.passphrase);
+      
+      const connectionConfig = {
         account: cleanedAccount,
         username: config.username,
-        password: config.password,
+        privateKey: privateKeyBuffer,
         warehouse: config.warehouse,
         database: config.database,
         schema: config.schema,
+        // IMPORTANT: Snowflake SDK bug workaround - provide empty password when using private key
+        password: '', // This prevents the "password must be specified" error
         // Add additional connection options for better reliability
         connectTimeout: 60000, // 60 seconds
         networkTimeout: 60000,
@@ -139,14 +203,42 @@ const connectToSnowflake = (config) => {
         // Handle SSL issues
         insecureConnect: false,
         ocspFailOpen: true
+      };
+      
+      // Log the connection configuration (without sensitive data)
+      console.log('🔧 Connection config prepared:', {
+        account: connectionConfig.account,
+        username: connectionConfig.username,
+        warehouse: connectionConfig.warehouse,
+        database: connectionConfig.database,
+        schema: connectionConfig.schema,
+        hasPrivateKey: !!connectionConfig.privateKey,
+        hasPassword: !!connectionConfig.password,
+        passwordLength: connectionConfig.password.length
       });
+
+      const connection = snowflake.createConnection(connectionConfig);
 
       connection.connect((err, conn) => {
         if (err) {
           console.error('❌ Failed to connect to Snowflake:', err.message);
+          console.error('📝 Error details:', {
+            code: err.code,
+            sqlState: err.sqlState,
+            message: err.message
+          });
+          
+          // Additional troubleshooting for private key auth
+          if (err.code === 404005) {
+            console.error('🔧 Troubleshooting: This might be a Snowflake SDK configuration issue');
+            console.error('   - Ensure your Snowflake user has the public key configured');
+            console.error('   - Verify the account identifier is correct');
+            console.error('   - Check if the private key format is supported');
+          }
+          
           reject(err);
         } else {
-          console.log('✅ Connected to Snowflake successfully');
+          console.log('✅ Connected to Snowflake successfully with private key authentication');
           snowflakeConnection = conn;
           resolve(conn);
         }
@@ -189,6 +281,7 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     timestamp: new Date().toISOString(),
     snowflake: snowflakeConnection ? 'connected' : 'disconnected',
+    authentication: 'private_key',
     endpoints: [
       'GET /api/health',
       'POST /api/snowflake/test-connection',
@@ -201,37 +294,55 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// Test Snowflake connection
+// Test Snowflake connection with private key
 app.post('/api/snowflake/test-connection', async (req, res) => {
   try {
-    console.log('🔗 Testing Snowflake connection...');
+    console.log('🔗 Testing Snowflake connection with private key...');
     const config = req.body;
     
-    // Validate required fields
-    if (!config.account || !config.username || !config.password) {
+    // Validate required fields for private key authentication
+    const requiredFields = ['account', 'username', 'privateKey', 'warehouse', 'database', 'schema'];
+    const missingFields = requiredFields.filter(field => !config[field]);
+    
+    if (missingFields.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Missing required Snowflake credentials (account, username, password)',
-        timestamp: new Date().toISOString()
+        message: `Missing required Snowflake credentials: ${missingFields.join(', ')}`,
+        timestamp: new Date().toISOString(),
+        requiredFields: requiredFields
       });
     }
     
     await connectToSnowflake(config);
     
+    // Test with a simple query
+    const testQuery = 'SELECT CURRENT_VERSION() AS VERSION, CURRENT_USER() AS USER, CURRENT_DATABASE() AS DATABASE';
+    const testResult = await executeSnowflakeQuery(testQuery);
+    
     res.json({
       success: true,
-      message: 'Connected to Snowflake successfully',
-      timestamp: new Date().toISOString()
+      message: 'Connected to Snowflake successfully with private key authentication',
+      timestamp: new Date().toISOString(),
+      connectionInfo: {
+        version: testResult[0]?.VERSION,
+        user: testResult[0]?.USER,
+        database: testResult[0]?.DATABASE
+      }
     });
   } catch (error) {
     console.error('❌ Snowflake connection failed:', error.message);
     
-    // Return a successful response but indicate we're using mock data
+    // Return a detailed error response
     res.json({
       success: false,
       message: `Snowflake connection failed: ${error.message}. Using mock data.`,
       timestamp: new Date().toISOString(),
-      fallback: 'mock_data'
+      fallback: 'mock_data',
+      errorDetails: {
+        type: error.name || 'ConnectionError',
+        code: error.code,
+        sqlState: error.sqlState
+      }
     });
   }
 });
@@ -381,10 +492,10 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
             EMERGENCY: maintenance.EMERGENCY || 0,
             OVERDUE: maintenance.OVERDUE || 0
           },
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         };
         
-        console.log('✅ Dashboard data loaded from Snowflake');
+        console.log('✅ Dashboard data loaded from Snowflake using private key authentication');
         return res.json(dashboardData);
         
       } catch (error) {
@@ -408,7 +519,7 @@ app.post('/api/snowflake/dashboard-data', async (req, res) => {
 app.post('/api/snowflake/equipment-data', async (req, res) => {
   try {
     console.log('🏗️ Loading equipment data...');
-    const { siteName } = req.body;
+    const { siteName, ...config } = req.body;
     
     if (snowflakeConnection) {
       try {
@@ -464,10 +575,10 @@ app.post('/api/snowflake/equipment-data', async (req, res) => {
             INSTALLATION_DATE: e.INSTALL_DATE
           })),
           siteName,
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         });
         
-        console.log(`✅ Equipment data loaded for site: ${siteName}`);
+        console.log(`✅ Equipment data loaded for site: ${siteName} using private key auth`);
         return;
         
       } catch (error) {
@@ -512,7 +623,7 @@ app.post('/api/snowflake/equipment-data', async (req, res) => {
 app.post('/api/snowflake/sensor-data', async (req, res) => {
   try {
     console.log('📊 Loading sensor data...');
-    const { equipmentId, days = 7 } = req.body;
+    const { equipmentId, days = 7, ...config } = req.body;
     
     if (snowflakeConnection) {
       try {
@@ -561,10 +672,10 @@ app.post('/api/snowflake/sensor-data', async (req, res) => {
           sensorData: transformedData,
           equipmentId,
           days,
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         });
         
-        console.log(`✅ Sensor data loaded for equipment: ${equipmentId}`);
+        console.log(`✅ Sensor data loaded for equipment: ${equipmentId} using private key auth`);
         return;
         
       } catch (error) {
@@ -654,7 +765,7 @@ app.post('/api/ml/train-model', async (req, res) => {
       message: 'Model training completed successfully',
       metrics: metrics,
       timestamp: new Date().toISOString(),
-      dataSource: snowflakeConnection ? 'snowflake_live' : 'mock'
+      dataSource: snowflakeConnection ? 'snowflake_live_privatekey' : 'mock'
     });
   } catch (error) {
     console.error('❌ ML model training error:', error);
@@ -669,7 +780,7 @@ app.post('/api/ml/train-model', async (req, res) => {
 app.post('/api/ml/predictions', async (req, res) => {
   try {
     console.log('🔮 Generating ML predictions...');
-    const { equipmentIds = [] } = req.body;
+    const { equipmentIds = [], ...config } = req.body;
     
     if (snowflakeConnection && equipmentIds.length > 0) {
       try {
@@ -736,10 +847,10 @@ app.post('/api/ml/predictions', async (req, res) => {
           success: true,
           predictions: transformedPredictions,
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         });
         
-        console.log(`✅ Generated ${transformedPredictions.length} predictions from Snowflake`);
+        console.log(`✅ Generated ${transformedPredictions.length} predictions from Snowflake using private key auth`);
         return;
         
       } catch (error) {
@@ -793,7 +904,7 @@ app.post('/api/ml/predictions', async (req, res) => {
 app.post('/api/snowflake/upload-sensor-data', async (req, res) => {
   try {
     console.log('📤 Uploading sensor data...');
-    const { sensorReadings } = req.body;
+    const { sensorReadings, ...config } = req.body;
     
     if (snowflakeConnection && sensorReadings && sensorReadings.length > 0) {
       try {
@@ -836,10 +947,10 @@ app.post('/api/snowflake/upload-sensor-data', async (req, res) => {
           message: 'Sensor data uploaded successfully to Snowflake',
           recordsUploaded: sensorReadings.length,
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         });
         
-        console.log(`✅ Uploaded ${sensorReadings.length} sensor readings to Snowflake`);
+        console.log(`✅ Uploaded ${sensorReadings.length} sensor readings to Snowflake using private key auth`);
         return;
         
       } catch (error) {
@@ -902,10 +1013,10 @@ app.post('/api/snowflake/maintenance-summary', async (req, res) => {
           maintenanceData: maintenanceData,
           costSavings: costSavings[0],
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         });
         
-        console.log('✅ Maintenance summary loaded from Snowflake');
+        console.log('✅ Maintenance summary loaded from Snowflake using private key auth');
         return;
         
       } catch (error) {
@@ -998,10 +1109,10 @@ app.post('/api/snowflake/analytics-data', async (req, res) => {
             mlPerformance: mlPerformance
           },
           timestamp: new Date().toISOString(),
-          dataSource: 'snowflake_live'
+          dataSource: 'snowflake_live_privatekey'
         });
         
-        console.log('✅ Analytics data loaded from Snowflake');
+        console.log('✅ Analytics data loaded from Snowflake using private key auth');
         return;
         
       } catch (error) {
@@ -1077,12 +1188,19 @@ app.use((req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Multiquip Backend API running on http://localhost:${PORT}`);
   console.log(`📊 Health Check: http://localhost:${PORT}/api/health`);
-  console.log(`🔗 Snowflake endpoints ready`);
+  console.log(`🔗 Snowflake endpoints ready with PRIVATE KEY authentication`);
   console.log(`🧠 ML endpoints ready`);
-  console.log(`\n🔧 To enable Snowflake integration:`);
-  console.log(`   1. Update your .env file with Snowflake credentials`);
-  console.log(`   2. Account should be: your-account-name (without .snowflakecomputing.com)`);
-  console.log(`   3. Run the data population script in Snowflake`);
+  console.log(`\n🔐 To enable Snowflake private key integration:`);
+  console.log(`   1. Update your .env file with these variables:`);
+  console.log(`      SNOWFLAKE_ACCOUNT=your-account-name`);
+  console.log(`      SNOWFLAKE_USERNAME=your-username`);
+  console.log(`      SNOWFLAKE_PRIVATE_KEY=/path/to/private_key.pem (or paste key content)`);
+  console.log(`      SNOWFLAKE_PASSPHRASE=your-passphrase (if key is encrypted)`);
+  console.log(`      SNOWFLAKE_WAREHOUSE=your-warehouse`);
+  console.log(`      SNOWFLAKE_DATABASE=your-database`);
+  console.log(`      SNOWFLAKE_SCHEMA=your-schema`);
+  console.log(`   2. Generate RSA key pair for your Snowflake user`);
+  console.log(`   3. Upload public key to Snowflake user account`);
   console.log(`   4. All dashboard metrics will be loaded from live Snowflake data`);
 });
 
